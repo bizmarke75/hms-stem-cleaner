@@ -1,0 +1,23 @@
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+
+# PyInstaller build artifacts
+build/
+dist/
+*.spec
+
+# Audio files & local stem vaults (never upload large WAVs to Git)
+*.wav
+*.WAV
+*.mp3
+*.flac
+_HMS_Rollback_Vault/
+HMS_Cleaned_Output/
+hms_raw_input/
+_archive_diagnostics/
+
+release_upload/
+_layer1_test_song/
+_layer2b_raw_in/
+_layer2b_clean_out/
