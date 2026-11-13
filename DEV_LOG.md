@@ -1,21 +1,24 @@
 # HMS Stem Cleaner & Headless VST3 Master Engine — Engineering Notebook
-**Owner:** Charles Pinkerton Sr. / 337 West Productions  
-**Last Updated:** 2026-11-12 19:58  
-**Repository Path:** `C:\github\projects\hms-stem-cleaner`  
-**Original Workspace:** `H:\suno projects`
+**Owner:** Charles Pinkerton Sr. / 337 West Productions
+**Last Updated:** 2026-11-12 21:03
+**Current Version:** `v1.0.0` (Standalone Win64 Release)
+**Local Repository Path:** `C:\github\projects\hms-stem-cleaner`
+**GitHub Remote URL:** `[https://github.com/bizmarke75/hms-stem-cleaner](https://github.com/bizmarke75/hms-stem-cleaner)`
+**Original Workspace:** `H:\suno projects` (Diagnostic clutter archived to `_archive_diagnostics\`)
 
 ---
 
 ## 1. Project Overview & Philosophy
 This utility automates the sorting, de-echoing, VST3 DSP cleanup, bus gluing, and 24-bit mastering of AI-generated music stems (Suno v5.5/v6 tracks split via MVSep / BS-RoFormer / Demucs).
-- **Why Headless Pedalboard over Reaper/FL Studio:** Runs 64-bit C++ VST3 plugins in memory 10x–50x faster than a DAW GUI, with zero `ReaFIR` FFT pre-ringing and exact sample-locked buffer summing.
-- **Release Policy:** Shared publicly on GitHub strictly **"AS-IS" (MIT License, No Warranty/Support)**.
+- **Zero-Import Single-File Design:** All layers (Atomic WAV I/O, Rollback Vault, VST3 C++ Engine, AI Telemetry Auto-Tuner, and Tkinter GUI) are consolidated into a single file (`hms_stem_cleaner_app.py`) to eliminate cross-module `ImportError` desyncs.
+- **Why Headless Pedalboard over Reaper/FL Studio:** Runs 64-bit C++ VST3 plugins in memory 10x-50x faster than a DAW GUI, with zero `ReaFIR` FFT pre-ringing and exact sample-locked buffer summing.
+- **Release Policy:** Shared publicly on GitHub strictly **'AS-IS' (MIT License, No Warranty/Support)**.
 
 ---
 
 ## 2. Root-Cause Troubleshooting Log (Lessons Learned)
 
-### Issue A: Metallic Slapback Echo on "The Wolves Were a Lie"
+### Issue A: Metallic Slapback Echo on 'The Wolves Were a Lie'
 1. **Duplicate / Ghost Stems in `[Music]` Folder:** MVSep folders contained both 4-stem and 6-stem Demucs outputs (`4_Keyboard_CLEAN.wav` at `-56.3 dB`, `6_Woodwinds_CLEAN.wav` at `-180.0 dB`, and composite `Music_CLEAN.wav` at `-58.5 dB` alongside `Guitars_CLEAN.wav` at `-25.3 dB`). Summing them triggered multi-stem gain scaling and doubled ghost vocal reverb tails.
    - **Fix (`filter_valid_bus_stems`):** Auto-rejects any stem with RMS `< -50.0 dB` and drops generic `*_Music_CLEAN.wav` or `*_Vocals_CLEAN.wav` composites when specific stems (`Guitars`, `Lead_Vocals`) exist.
 2. **Center-Channel Vocal Bleed Inside Guitars (`suppress_vocal_bleed_in_music`):** MVSep dumps leftover vocal reverb tails into the center (`Mid`) channel of the `Music`/`Guitars` stem.
@@ -23,7 +26,15 @@ This utility automates the sorting, de-echoing, VST3 DSP cleanup, bus gluing, an
 3. **CHOWTapeModel Playhead Comb-Filtering & Pitch Drift:** By default, `CHOWTapeModel.vst3` loads with `loss_on_off = True` (playhead gap comb filter) and `wow_flutter_on_off = True`, shifting phase between buses.
    - **Fix:** Explicitly set `wow_flutter_on_off = False` and `loss_on_off = False` on all buses.
 4. **Baked-In Mono Suno Vocal Delay:** When Suno bakes a ~120ms mono slapback directly into the vocal stem, heavy compression (`MJUCjr` at `22 dB`) pulls up the `-22 dB` delay repeats between words.
-   - **Fix (`hms_ai_controller.py`):** Measure 25th-percentile active vocal tail floor (`p25_tail_db`). If `> -34.0 dB`, automatically raise `NoiseGate` threshold to `-24.0 to -30.0 dB` and lower `MJUCjr` `compress` to `11.0 dB`.
+   - **Fix (`analyze_and_autotune_song`):** Measure 25th-percentile active vocal tail floor (`p25_tail_db`). If `> -34.0 dB`, automatically raise `NoiseGate` threshold to `-22.0 to -32.0 dB` and lower `MJUCjr` `compress` to `11.0 dB`.
+
+### Issue B: Git Remote HTTP 400 Error on Initial Push
+- **Cause:** Running `git remote add origin` with a bracketed placeholder URL caches the invalid URL in `.git/config`.
+- **Fix:** Overwrite the cached remote URL via `git remote set-url origin [https://github.com/bizmarke75/hms-stem-cleaner.git](https://github.com/bizmarke75/hms-stem-cleaner.git)`.
+
+### Issue C: Unterminated Triple-Quoted F-String in Notebook Generator
+- **Cause:** Nested triple-backtick code blocks inside a Python triple-quoted f-string (`f"""`) can clip when copied across chat/browser buffers.
+- **Fix:** Construct Markdown files using a list of standard single-line strings joined with `"\n".join(lines)`.
 
 ---
 
@@ -31,7 +42,7 @@ This utility automates the sorting, de-echoing, VST3 DSP cleanup, bus gluing, an
 
 ### A. `CHOWTapeModel.vst3`
 - **Binary Path (Unwrapped Bundle):** `C:\Program Files\Common Files\VST3\CHOWTapeModel.vst3\Contents\x86_64-win\CHOWTapeModel.vst3`
-- **Verified Keys:**
+- **Verified Keys (11 Levers):**
   - `wow_flutter_on_off`: `False` (bool) — **CRITICAL: Prevents phase drift**
   - `loss_on_off`: `False` (bool) — **CRITICAL: Disables playhead gap comb filter**
   - `flutter_depth`: `0.0` (`0.0` to `1.0`)
@@ -46,7 +57,7 @@ This utility automates the sorting, de-echoing, VST3 DSP cleanup, bus gluing, an
 
 ### B. `TDR Nova.vst3`
 - **Binary Path:** `C:\Program Files\Common Files\VST3\TDR Nova.vst3`
-- **Verified Keys:**
+- **Verified Keys (23 Vocal Levers / 16 Music Levers / 12 Master Levers):**
   - `hp_active`: `True` (bool), `hp_frequency_hz`: `95.0` (Vocals) / `115.0` (Music) / `28.0` (Master)
   - `band_X_active`: `True` (bool, where X = 1, 2, 3, 4)
   - `band_X_frequency_hz`: float (`10.0` to `40000.0` Hz)
@@ -59,7 +70,7 @@ This utility automates the sorting, de-echoing, VST3 DSP cleanup, bus gluing, an
 
 ### C. `MJUCjr.vst3`
 - **Binary Path:** `C:\Program Files\Common Files\VST3\MJUCjr.vst3`
-- **Verified Keys:**
+- **Verified Keys (3 Levers):**
   - `compress`: `22.0` for clean vocals / `11.0` for echo-heavy vocals (`0.0` to `48.0` dB)
   - `makeup`: `2.0` (`-12.0` to `36.0` dB) — **Note: No underscore!**
   - `timing`: `'fast'` (valid strings: `'fast'`, `'slow'`, `'auto'`)
@@ -67,20 +78,36 @@ This utility automates the sorting, de-echoing, VST3 DSP cleanup, bus gluing, an
 ---
 
 ## 4. Verified Mix Balance Slider Profiles
-- **Heavy Nu-Metal / Industrial Wall (Default — Tuned on *"Sensory Bleed"*):**
+- **Heavy Nu-Metal / Industrial Wall (Default — Tuned on 'Sensory Bleed'):**
   - `Vocals`: `1.18` | `Rhythm`: `0.92` | `Music`: `0.76` | `Vocal Gate`: `-36.0 dB`
-- **Dynamic / Acoustic Intro-Outro Rock (Tuned on *"The Wolves Were a Lie"*):**
-  - `Vocals`: `1.12` | `Rhythm`: `0.92` | `Music`: `0.82` | `Vocal Gate`: `-26.0 dB`
+- **Dynamic / Acoustic Intro-Outro Rock (Tuned on 'The Wolves Were a Lie'):**
+  - `Vocals`: `1.10`-`1.12` | `Rhythm`: `0.92` | `Music`: `0.82` | `Vocal Gate`: `-24.0` to `-28.0 dB`
 
 ---
 
-## 5. 4-Phase GitHub & Standalone EXE Roadmap
-- [x] **Phase 1:** Bootstrap `C:\github\projects\hms-stem-cleaner` (`setup_github_repo.py` + `DEV_LOG.md` + `README.md` + `LICENSE` + `.gitignore`).
-- [ ] **Phase 2:** Flatten `hms_headless_dsp.py`, `mvsep_gui_injector.py`, `hms_ai_controller.py`, and `hms_workspace_manager.py` into a single, zero-import master script (`hms_stem_cleaner_app.py`) with Atomic Temp-File Rendering and Rollback Vault buttons.
-- [ ] **Phase 3:** Build standalone `HMS_Stem_Cleaner.exe` via PyInstaller (`build_standalone_exe.py`).
-- [ ] **Phase 4:** Initialize Git repository, commit v1.0.0 release, and push to GitHub.
+## 5. Single-File Architecture Map (`hms_stem_cleaner_app.py`)
+1. **Layer 1A (`get_app_base_dir`):** PyInstaller-safe path resolver (`sys.frozen` check).
+2. **Layer 1B (`write_wav_atomic`):** Writes to `.tmp_<PID>.wav` first, checks `> 44 bytes`, then executes atomic `os.replace()` so interrupted renders never corrupt existing `.wav` files.
+3. **Layer 1C (`create_song_checkpoint` & `restore_song_checkpoint`):** Backs up raw source `.wav` stems to `_HMS_Rollback_Vault\<Song_Name>\snapshot_<Timestamp>\` before any move or DSP render.
+4. **Layer 2A (`resolve_vst3_binary_path`, `set_lever_exact`, `configure_*`):** Unwraps VST3 bundle directories and binds verified C++ parameters.
+5. **Layer 2B (`filter_valid_bus_stems`, `suppress_vocal_bleed_in_music`, `render_master_mixdown`, `analyze_and_autotune_song`, `execute_stem_cleanup`):** Core headless DSP & AI telemetry auto-tuning engine.
+6. **Layer 3 (`HMSStudioSingleFileGUI`):** Unified Dark-Mode Tkinter GUI featuring Sliders + Buttons `0. AI AUTO-TUNE`, `1. DRY-RUN AUDIT`, `2. FULL LIVE CLEAN + MASTER`, `3. GLUE BUSES & MASTER ONLY`, and `4. ROLLBACK CHECKPOINT`.
 
 ---
 
-## 6. Quick Copy-Paste Prompt for Future AI Chat Sessions
-> "We are working on the HMS Stem Cleaner & Headless VST3 Master Engine in `C:\github\projects\hms-stem-cleaner`. Please read the attached `DEV_LOG.md` for our verified VST3 C++ parameter keys, anti-echo DSP architecture, and current roadmap phase, and follow the `modular-python-builder` skill (one function at a time with `[RUN]`/`[SUCCESS]`/`[ERROR]` logs and isolated verification snippets)."
+## 6. Completed Roadmap & Key Maintenance Commands
+- [x] **Phase 1:** Bootstrapped `C:\github\projects\hms-stem-cleaner` (`README.md`, `LICENSE`, `.gitignore`, `DEV_LOG.md`, `src_backup\`).
+- [x] **Phase 2:** Flattened all modules into `hms_stem_cleaner_app.py` with atomic file writes and Rollback Vault.
+- [x] **Phase 3:** Compiled standalone `dist\HMS_Stem_Cleaner.exe` via `build_standalone_exe.py`.
+- [x] **Phase 4:** Committed `v1.0.0`, packaged `release_upload\HMS_Stem_Cleaner_v1.0.0_Win64_Standalone.zip`, and pushed to `[https://github.com/bizmarke75/hms-stem-cleaner](https://github.com/bizmarke75/hms-stem-cleaner)`.
+
+### Common PowerShell Commands
+- **Launch GUI from source:** `python.exe C:\github\projects\hms-stem-cleaner\hms_stem_cleaner_app.py`
+- **Run Headless Self-Test:** `python.exe C:\github\projects\hms-stem-cleaner\hms_stem_cleaner_app.py --test-layer2b`
+- **Rebuild Standalone EXE:** `python.exe C:\github\projects\hms-stem-cleaner\build_standalone_exe.py`
+- **Update & Push DEV_LOG.md:** `python.exe C:\github\projects\hms-stem-cleaner\update_dev_notebook.py --push`
+
+---
+
+## 7. Quick Copy-Paste Prompt for Future AI Chat Sessions
+> We are working on the HMS Stem Cleaner & Headless VST3 Master Engine (v1.0.0) at C:\github\projects\hms-stem-cleaner (GitHub: [https://github.com/bizmarke75/hms-stem-cleaner](https://github.com/bizmarke75/hms-stem-cleaner)). Please read the attached DEV_LOG.md for our single-file Layer 1-3 architecture (hms_stem_cleaner_app.py), verified VST3 C++ parameter keys, and anti-echo DSP math, and follow the modular-python-builder skill (one function at a time with [RUN]/[SUCCESS]/[ERROR] logs and isolated verification snippets).
