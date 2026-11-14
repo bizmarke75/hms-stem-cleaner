@@ -311,7 +311,9 @@ def extract_clean_stem_tag(raw_filename, song_name, parent_folder_name=""):
             stem_role = "Guitars"
         elif "synth" in lower_name or "keys" in lower_name or "piano" in lower_name:
             stem_role = "Synths"
-        elif "other" in lower_name or "inst" in lower_name or "music" in lower_name:
+        elif "other" in lower_name:
+            stem_role = "Other_Synths"
+        elif "inst" in lower_name or "music" in lower_name:
             stem_role = "Music"
         else:
             cleaned_custom = re.sub(r"[^a-zA-Z0-9]+", "_", name_no_ext).strip("_")
@@ -696,7 +698,58 @@ def filter_valid_bus_stems(bus_name, clean_wav_paths, min_rms_db=-50.0):
     return valid_stems
 
 
+
+# ==============================================================================
+# MIX STYLE MODE SWITCH (AUTO / ACOUSTIC DYNAMIC ROCK / HEAVY METAL)
+# ==============================================================================
+HMS_MIX_STYLE_ACTIVE = "auto"
+HMS_MIX_MODES = {
+    "Auto-Detect (Smart Telemetry)": "auto",
+    "Acoustic / Dynamic Rock (Preserve Center Guitars)": "acoustic",
+    "Heavy Metal / Industrial (Nu-Metal Wall & Mid/Side Pocket)": "heavy",
+}
+
+
+def resolve_hms_mix_style(song_dir, requested_mode=None):
+    """
+    Resolves 'auto' mode into either 'acoustic' or 'heavy' by checking the song
+    folder name and measuring Mid vs. Side energy on Guitar/Music stems.
+    """
+    mode = (requested_mode or HMS_MIX_STYLE_ACTIVE or "auto").lower()
+    if mode in ("acoustic", "heavy"):
+        return mode
+
+    if song_dir and os.path.isdir(song_dir):
+        lower_dir = os.path.basename(os.path.normpath(song_dir)).lower()
+        if any(k in lower_dir for k in ("acoustic", "unplugged", "solo", "ballad", "folk")):
+            print("[INFO] [MODE AUTO-DETECT] Filename keyword matched -> ACOUSTIC / DYNAMIC ROCK mode.")
+            return "acoustic"
+
+        try:
+            for r, _, files in os.walk(song_dir):
+                for fn in files:
+                    if fn.lower().endswith(".wav") and any(
+                        g in fn.lower() for g in ("guitar", "other", "music", "acoustic")
+                    ):
+                        with AudioFile(os.path.join(r, fn)) as af:
+                            buf = af.read(min(af.frames, int(af.samplerate * 60)))
+                        if buf.shape[0] >= 2:
+                            mid_rms = np.sqrt(np.mean((0.5 * (buf[0] + buf[1])) ** 2) + 1e-12)
+                            side_rms = np.sqrt(np.mean((0.5 * (buf[0] - buf[1])) ** 2) + 1e-12)
+                            if float(20.0 * np.log10(mid_rms / side_rms)) > 3.5:
+                                print("[INFO] [MODE AUTO-DETECT] Center-dominant Guitar stem -> ACOUSTIC / DYNAMIC ROCK mode.")
+                                return "acoustic"
+        except Exception:
+            pass
+
+    print("[INFO] [MODE AUTO-DETECT] Wide stereo Guitar/Music wall -> HEAVY METAL / INDUSTRIAL mode.")
+    return "heavy"
+
+
 def suppress_vocal_bleed_in_music(music_buf, vocals_buf, sr):
+    if HMS_MIX_STYLE_ACTIVE == 'acoustic':
+        print('[INFO] [ACOUSTIC MODE] Bypassing Mid-channel guitar carve to preserve centered guitars & solos.')
+        return music_buf
     """
     Decomposes the stereo Music buffer into Mid and Side, notches out center-channel
     vocal reverb bleed (420 Hz & 1.8 kHz), and attenuates Mid bleed by 2.5 dB.
@@ -1434,6 +1487,28 @@ class HMSStudioSingleFileGUI:
     def _set_buttons_state(self, state: str):
         for btn in (self.btn_autotune, self.btn_dry_run, self.btn_live_clean, self.btn_master_only, self.btn_rollback):
             btn.configure(state=state)
+
+    def on_mix_style_changed(self, selected_label):
+        """Updates HMS_MIX_STYLE_ACTIVE and pre-sets sliders for Acoustic vs. Heavy mode."""
+        global HMS_MIX_STYLE_ACTIVE
+        mode_key = HMS_MIX_MODES.get(selected_label, "auto")
+        HMS_MIX_STYLE_ACTIVE = mode_key
+        if mode_key == "acoustic":
+            self.vocals_weight_var.set(0.90)
+            self.rhythm_weight_var.set(1.02)
+            self.music_weight_var.set(0.98)
+            self.vocal_gate_db_var.set(-38.0)
+            self.vst_overrides = {"mjuc_compress": 14.0, "mjuc_makeup": 0.5, "nova_music_pocket_db": -1.0}
+            self.log_status("[INFO] Switched to ACOUSTIC / DYNAMIC ROCK: Vocals=0.90, Rhythm=1.02, Music=0.98, Gate=-38dB (Center Guitars Preserved)\n")
+        elif mode_key == "heavy":
+            self.vocals_weight_var.set(1.05)
+            self.rhythm_weight_var.set(1.00)
+            self.music_weight_var.set(0.92)
+            self.vocal_gate_db_var.set(-36.0)
+            self.vst_overrides = {"mjuc_compress": 18.0, "mjuc_makeup": 1.0, "nova_music_pocket_db": -3.2}
+            self.log_status("[INFO] Switched to HEAVY METAL / INDUSTRIAL: Vocals=1.05, Rhythm=1.00, Music=0.92, Gate=-36dB (Mid/Side Pocket Active)\n")
+        else:
+            self.log_status("[INFO] Switched to AUTO-DETECT mode (evaluates song folder & stem telemetry on run).\n")
 
     def reset_slider_defaults(self):
         self.vocals_weight_var.set(1.18)

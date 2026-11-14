@@ -1,6 +1,6 @@
 # HMS Stem Cleaner & Headless VST3 Master Engine — Engineering Notebook
 **Owner:** Charles Pinkerton Sr. / 337 West Productions
-**Last Updated:** 2026-11-12 21:03
+**Last Updated:** 2026-11-13 07:49
 **Current Version:** `v1.0.0` (Standalone Win64 Release)
 **Local Repository Path:** `C:\github\projects\hms-stem-cleaner`
 **GitHub Remote URL:** `[https://github.com/bizmarke75/hms-stem-cleaner](https://github.com/bizmarke75/hms-stem-cleaner)`
@@ -111,3 +111,29 @@ This utility automates the sorting, de-echoing, VST3 DSP cleanup, bus gluing, an
 
 ## 7. Quick Copy-Paste Prompt for Future AI Chat Sessions
 > We are working on the HMS Stem Cleaner & Headless VST3 Master Engine (v1.0.0) at C:\github\projects\hms-stem-cleaner (GitHub: [https://github.com/bizmarke75/hms-stem-cleaner](https://github.com/bizmarke75/hms-stem-cleaner)). Please read the attached DEV_LOG.md for our single-file Layer 1-3 architecture (hms_stem_cleaner_app.py), verified VST3 C++ parameter keys, and anti-echo DSP math, and follow the modular-python-builder skill (one function at a time with [RUN]/[SUCCESS]/[ERROR] logs and isolated verification snippets).
+
+
+---
+
+# HMS Stem Cleaner & Headless VST3 Master Engine v1.1.0 (Provided As-Is)
+
+**Release Date:** 2026-11-14  
+**Studio:** 337 West Productions  
+**License:** MIT (Provided strictly **AS-IS** with no warranty or technical support)
+
+---
+
+## What's New in v1.1.0
+
+### 1. Mix Style Mode Switch (`Auto-Detect`, `Acoustic / Dynamic Rock`, `Heavy Metal / Industrial`)
+* **Auto-Detect (Smart Telemetry):** Automatically inspects song folder keywords (`acoustic`, `solo`, `unplugged`) and measures Guitar/Music Mid-vs-Side stereo energy to select the optimal DSP profile.
+* **Acoustic / Dynamic Rock Mode:** Bypasses Mid-channel center guitar carving (`suppress_vocal_bleed_in_music`) so centered acoustic guitars and centered guitar solos stay 100% intact, while setting a natural vocal balance (`Vocals=0.90`, `Rhythm=1.02`, `Music=0.98`, `MJUCjr Makeup=+0.5 dB`).
+* **Heavy Metal / Industrial Mode:** Engages the full Mid/Side center vocal pocket (`350 Hz – 2.8 kHz`) and punchy bus weights for dense high-gain guitar and synth walls.
+
+### 2. 6-Stem MVSep (`BS Roformer SW`) Synth & `Other` Stem Retention Fix
+* Fixed an issue where MVSep 6-stem `other` files (synths, atmospheric pads, electronic arpeggios, and industrial outros) were tagged as generic `*_Music_CLEAN.wav` and skipped when `*_Guitars_CLEAN.wav` was present in the `[Music]` bus.
+* `other` stems are now routed as dedicated `Other_Synths` stems and summed cleanly alongside `Guitars` during bus gluing and 24-bit Master Mixdown rendering.
+
+### 3. MVSep GUI Bridge Upgrades (`mvsep_gui.py`)
+* **Persistent User Config (`~/.mvsep_hms_config.json`):** Saves your MVSep API token and preferred HMS Mix Style Mode locally across restarts.
+* **Lossless WAV -> FLAC Pre-Compression & 600s Socket Write Timeout:** Compresses large uncompressed `.wav` masters (>15 MB) into temporary lossless `.flac` files before upload and uses a single-float `600.0s` socket timeout so 45+ MB uploads never drop at 20 seconds on Windows SSL sockets.
