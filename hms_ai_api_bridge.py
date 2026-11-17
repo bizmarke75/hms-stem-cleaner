@@ -166,6 +166,9 @@ class _HMSRequestHandler(BaseHTTPRequestHandler):
         body = json.dumps(payload, indent=2).encode("utf-8")
         self.send_response(status_code)
         self.send_header("Content-Type", "application/json")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -226,6 +229,141 @@ def start_local_hms_api_server(host="127.0.0.1", port=8765, log_callback=print):
         log_callback("[ERROR] Failed starting Local HMS REST API Server:")
         log_callback(traceback.format_exc())
         return None, None
+
+
+
+
+# === WEB_DAW_CREDENTIALS_ENDPOINT_PATCH ===
+def _patch_hms_request_handler_for_credentials():
+    orig_do_get = _HMSRequestHandler.do_GET
+    orig_do_post = _HMSRequestHandler.do_POST
+
+    def _do_options(self):
+        self.send_response(200)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.end_headers()
+
+    def _enhanced_do_get(self):
+        if self.path.startswith("/api/credentials"):
+            creds = load_ai_credentials(log_callback=lambda _: None)
+            self._send_json(200, {
+                "status": "ok",
+                "mvsep_api_token": creds.get("mvsep_api_token", ""),
+                "gemini_api_key": creds.get("gemini_api_key", ""),
+                "openai_api_key": creds.get("openai_api_key", ""),
+            })
+            return
+        return orig_do_get(self)
+
+    def _enhanced_do_post(self):
+        if self.path.startswith("/api/credentials"):
+            try:
+                content_len = int(self.headers.get("Content-Length", 0))
+                raw = self.rfile.read(content_len).decode("utf-8") if content_len else "{}"
+                req = json.loads(raw) if raw else {}
+                updates = {}
+                mv_val = req.get("mvsep_api_token") or req.get("mvsep_token") or req.get("mvsepKey")
+                gm_val = req.get("gemini_api_key") or req.get("gemini_key") or req.get("geminiKey")
+                if mv_val is not None and str(mv_val).strip():
+                    updates["mvsep_api_token"] = str(mv_val).strip()
+                if gm_val is not None and str(gm_val).strip():
+                    updates["gemini_api_key"] = str(gm_val).strip()
+                ok = save_ai_credentials(updates)
+                creds = load_ai_credentials(log_callback=lambda _: None)
+                self._send_json(200 if ok else 500, {
+                    "status": "ok" if ok else "error",
+                    "mvsep_api_token": creds.get("mvsep_api_token", ""),
+                    "gemini_api_key": creds.get("gemini_api_key", ""),
+                })
+            except Exception as ex:
+                self._send_json(500, {"status": "error", "message": str(ex)})
+            return
+        return orig_do_post(self)
+
+    _HMSRequestHandler.do_OPTIONS = _do_options
+    _HMSRequestHandler.do_GET = _enhanced_do_get
+    _HMSRequestHandler.do_POST = _enhanced_do_post
+
+
+_patch_hms_request_handler_for_credentials()
+
+
+
+
+# === WEB_DAW_FULL_REST_BRIDGE_PATCH ===
+_SHARED_WEB_DAW_BRIDGE = None
+
+def _get_shared_web_daw_bridge():
+    global _SHARED_WEB_DAW_BRIDGE
+    if _SHARED_WEB_DAW_BRIDGE is None:
+        import hms_web_daw_launcher as launcher
+        _SHARED_WEB_DAW_BRIDGE = launcher.HMSWebDawBridge()
+    return _SHARED_WEB_DAW_BRIDGE
+
+
+def _patch_rest_server_for_full_web_daw():
+    prev_do_get = _HMSRequestHandler.do_GET
+    prev_do_post = _HMSRequestHandler.do_POST
+
+    def _full_do_get(self):
+        if self.path.startswith("/api/mvsep/status"):
+            b = _get_shared_web_daw_bridge()
+            self._send_json(200, b.get_mvsep_job_status())
+            return
+        if self.path.startswith("/api/status"):
+            b = _get_shared_web_daw_bridge()
+            self._send_json(200, b.get_status())
+            return
+        return prev_do_get(self)
+
+    def _full_do_post(self):
+        try:
+            content_len = int(self.headers.get("Content-Length", 0))
+            raw = self.rfile.read(content_len).decode("utf-8") if content_len else "{}"
+            req = json.loads(raw) if raw else {}
+        except Exception:
+            req = {}
+
+        if self.path.startswith("/api/browse_song"):
+            b = _get_shared_web_daw_bridge()
+            self._send_json(200, b.browse_song_file())
+            return
+
+        if self.path.startswith("/api/browse_folder"):
+            b = _get_shared_web_daw_bridge()
+            title = req.get("title", "Select Folder")
+            self._send_json(200, b.browse_folder(title))
+            return
+
+        if self.path.startswith("/api/mvsep/start"):
+            b = _get_shared_web_daw_bridge()
+            self._send_json(200, b.start_mvsep_separation(req))
+            return
+
+        if self.path.startswith("/api/mvsep/cancel"):
+            b = _get_shared_web_daw_bridge()
+            self._send_json(200, b.cancel_mvsep_separation())
+            return
+
+        if self.path.startswith("/api/mvsep/classic"):
+            b = _get_shared_web_daw_bridge()
+            self._send_json(200, b.launch_classic_mvsep_gui())
+            return
+
+        if self.path.startswith("/api/run_action"):
+            b = _get_shared_web_daw_bridge()
+            self._send_json(200, b.run_clean(req))
+            return
+
+        return prev_do_post(self)
+
+    _HMSRequestHandler.do_GET = _full_do_get
+    _HMSRequestHandler.do_POST = _full_do_post
+
+
+_patch_rest_server_for_full_web_daw()
 
 
 if __name__ == "__main__":
