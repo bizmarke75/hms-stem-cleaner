@@ -21,3 +21,5 @@ release_upload/
 _layer1_test_song/
 _layer2b_raw_in/
 _layer2b_clean_out/
+
+*.tmp

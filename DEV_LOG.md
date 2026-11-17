@@ -137,3 +137,35 @@ This utility automates the sorting, de-echoing, VST3 DSP cleanup, bus gluing, an
 ### 3. MVSep GUI Bridge Upgrades (`mvsep_gui.py`)
 * **Persistent User Config (`~/.mvsep_hms_config.json`):** Saves your MVSep API token and preferred HMS Mix Style Mode locally across restarts.
 * **Lossless WAV -> FLAC Pre-Compression & 600s Socket Write Timeout:** Compresses large uncompressed `.wav` masters (>15 MB) into temporary lossless `.flac` files before upload and uses a single-float `600.0s` socket timeout so 45+ MB uploads never drop at 20 seconds on Windows SSL sockets.
+
+
+---
+
+# 337 West Studio Suite — HMS Stem Cleaner & MVSep Cloud Splitter v1.2.0 (Provided As-Is)
+
+**Release Date:** 2026-11-17
+**Studio:** 337 West Productions
+**License:** MIT (Provided strictly **AS-IS** with no warranty or technical support)
+
+---
+
+## What's New in v1.2.0
+
+### 1. Unified 2-Tab Dark-Mode Studio GUI (`hms_unified_studio_app.py` / `HMS_Unified_Studio.exe`)
+- Combines **Tab 1: MVSep Cloud Stem Splitter** and **Tab 2: HMS 9-Slider VST3 Cleaner & Master Mixer** into a single window.
+- Shared top bar persists both your **MVSep API Token** and **Gemini 2.5 Flash API Key** (`~/.mvsep_hms_config.json`) and includes a 1-click **Local REST API (`127.0.0.1:8765`)** toggle.
+
+### 2. Expanded 9-Slider Live Mixer & C++ VST3 Bus Controls
+- Exposes 5 new live VST3 and mastering sliders alongside `Vocals`, `Rhythm`, `Music`, and `Vocal Gate (dB)`:
+  1. **Vocal Pocket (dB)** (`nova_music_pocket_db`): Controls `TDR Nova` 2.2 kHz center-channel carving on the `Music` bus.
+  2. **Vocal Comp (MJUCjr)** (`mjuc_compress`): Adjusts tube vocal compression (`0.0` to `40.0`).
+  3. **Vocal Makeup (dB)** (`mjuc_makeup`): Adds front-of-mix vocal grit and presence (`0.0` to `6.0 dB`).
+  4. **Rhythm Tape Drive** (`chow_rhythm_drive`): Controls `CHOWTapeModel` analog saturation on kick, snare, and sub-bass.
+  5. **Master Ceiling (dB)** (`master_ceiling_db`): Sets the final brickwall limiter ceiling (`-2.0` to `-0.1 dB`).
+
+### 3. Automatic Per-Song Mix Settings JSON (`hms_mix_json_manager.py`)
+- Every Master Mix render automatically saves `<Song_Name>_MIX_SETTINGS.json` next to `<Song_Name>_MASTER_MIX.wav`.
+- Includes **`💾 Save Mix JSON`** and **`📂 Load Mix JSON`** buttons (plus automatic preset loading when selecting a song folder).
+
+### 4. Repository Declutter & Archive Organization
+- Moved all one-time diagnostic, test, and patch scripts into `_archive_diagnostics\` so the repository root contains only clean production modules.

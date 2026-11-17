@@ -12,6 +12,30 @@ import shutil
 import argparse
 import threading
 import traceback
+
+# ==============================================================================
+# MIX SETTINGS JSON MANAGER HOOK (AUTO-SAVE & LOAD PRESETS)
+# ==============================================================================
+try:
+    from hms_mix_json_manager import save_song_mix_json, load_song_mix_json, DEFAULT_MIX_PRESET
+except Exception:
+    DEFAULT_MIX_PRESET = {
+        "mix_style": "heavy",
+        "vocal_gate_db": -33.0,
+        "bus_weights": {"Vocals": 1.08, "Rhythm": 1.04, "Music": 0.90},
+        "vst_overrides": {
+            "nova_music_pocket_db": -2.5,
+            "mjuc_compress": 18.0,
+            "mjuc_makeup": 1.5,
+            "chow_rhythm_drive": 0.35,
+            "master_ceiling_db": -0.3,
+        },
+    }
+    def save_song_mix_json(*args, **kwargs):
+        return None
+    def load_song_mix_json(*args, **kwargs):
+        return None
+
 from pathlib import Path
 from datetime import datetime
 import tkinter as tk
@@ -781,7 +805,14 @@ def suppress_vocal_bleed_in_music(music_buf, vocals_buf, sr):
         return music_buf
 
 
-def render_master_mixdown(dest_song_dir, song_name=None, vst3_status=None, bus_weights=None):
+def render_master_mixdown(
+    dest_song_dir,
+    song_name=None,
+    vst3_status=None,
+    bus_weights=None,
+    vocal_gate_db=-33.0,
+    vst_overrides=None,
+):
     """
     Filters out sub-50dB ghost stems, applies Mid/Side vocal-bleed suppression,
     atomically writes 24-bit *_GLUED.wav bus stems, and renders <Song_Name>_MASTER_MIX.wav.
@@ -1828,6 +1859,453 @@ def _verify_layer2b_full_dsp_pipeline():
     shutil.rmtree(test_out_root, ignore_errors=True)
     shutil.rmtree(os.path.join(base_dir, "_HMS_Rollback_Vault", "Test_Track"), ignore_errors=True)
     print("[SUCCESS] FULL HEADLESS ENGINE VERIFICATION PASSED 100%!")
+
+
+
+
+# ==============================================================================
+# GEMINI ON-THE-FLY TUNER & SAVED API KEY EXTENSION FOR HMS STUDIO GUI
+# ==============================================================================
+def _attach_gemini_controls_to_hms_gui():
+    try:
+        import hms_gemini_tuner as gt
+    except ImportError:
+        gt = None
+
+    if "HMSStudioSingleFileGUI" not in globals():
+        return
+
+    orig_init = HMSStudioSingleFileGUI.__init__
+
+    def _patched_init(self, root):
+        orig_init(self, root)
+        if getattr(self, "_gemini_bar_attached", False):
+            return
+        self._gemini_bar_attached = True
+
+        # Build a dark-mode Gemini API Key & On-the-Fly Master WAV Tuner bar at the top
+        gem_frame = tk.LabelFrame(
+            self.root,
+            text=" Gemini 2.5 Flash On-the-Fly Connector (Saved Key + Live Master WAV Tuner) ",
+            bg="#151922",
+            fg="#7dcfff",
+            font=("Consolas", 10, "bold"),
+            padx=10,
+            pady=6,
+        )
+        gem_frame.pack(fill="x", padx=14, pady=(2, 6))
+
+        tk.Label(
+            gem_frame, text="Gemini API Key:", bg="#151922", fg="#c0caf5", font=("Consolas", 9)
+        ).pack(side="left", padx=(0, 6))
+
+        saved_key = gt.load_or_save_gemini_key(log_callback=lambda _: None) if gt else ""
+        self.gemini_key_var = tk.StringVar(value=saved_key)
+        self.gemini_entry = tk.Entry(
+            gem_frame,
+            textvariable=self.gemini_key_var,
+            show="*",
+            width=34,
+            bg="#1f2335",
+            fg="#c0caf5",
+            insertbackground="#c0caf5",
+            font=("Consolas", 9),
+        )
+        self.gemini_entry.pack(side="left", padx=(0, 6))
+
+        self._show_gem_key = tk.BooleanVar(value=False)
+
+        def _toggle_gem_show():
+            self.gemini_entry.config(show="" if self._show_gem_key.get() else "*")
+
+        tk.Checkbutton(
+            gem_frame,
+            text="Show",
+            variable=self._show_gem_key,
+            command=_toggle_gem_show,
+            bg="#151922",
+            fg="#c0caf5",
+            selectcolor="#1f2335",
+            activebackground="#151922",
+            font=("Consolas", 9),
+        ).pack(side="left", padx=(0, 6))
+
+        def _save_gem_key():
+            key_val = self.gemini_key_var.get().strip()
+            if not key_val:
+                messagebox.showwarning("Empty Key", "Paste your Gemini API Key first.")
+                return
+            if gt:
+                gt.load_or_save_gemini_key(key_val)
+                messagebox.showinfo(
+                    "Saved",
+                    "Gemini API Key saved to ~/.mvsep_hms_config.json!\n"
+                    "It is now shared between HMS Stem Cleaner and MVSep GUI.",
+                )
+
+        tk.Button(
+            gem_frame,
+            text="💾 Save Key",
+            command=_save_gem_key,
+            bg="#3b4261",
+            fg="#ffffff",
+            font=("Consolas", 9, "bold"),
+            padx=8,
+        ).pack(side="left", padx=(0, 8))
+
+        def _tune_master_wav_on_the_fly():
+            if not gt:
+                messagebox.showerror("Missing Module", "hms_gemini_tuner.py was not found.")
+                return
+            picked_wav = filedialog.askopenfilename(
+                title="Select Master Mix WAV (or Stem Folder) to Tune On the Fly",
+                filetypes=[("WAV Audio Files", "*.wav"), ("All Files", "*.*")],
+            )
+            if not picked_wav:
+                return
+            key_val = self.gemini_key_var.get().strip()
+            if key_val:
+                gt.load_or_save_gemini_key(key_val)
+
+            def _apply_sliders(prof):
+                bw = prof.get("bus_weights", {})
+                if hasattr(self, "vox_weight_var"):
+                    self.vox_weight_var.set(bw.get("Vocals", 1.10))
+                if hasattr(self, "rhy_weight_var"):
+                    self.rhy_weight_var.set(bw.get("Rhythm", 0.92))
+                if hasattr(self, "mus_weight_var"):
+                    self.mus_weight_var.set(bw.get("Music", 0.80))
+                if hasattr(self, "vocal_gate_var"):
+                    self.vocal_gate_var.set(prof.get("vocal_gate_db", -36.0))
+
+            def _worker():
+                res = gt.run_on_the_fly_gemini_mix_loop(
+                    target_path=picked_wav,
+                    api_key=key_val,
+                    auto_reglue_master=True,
+                    gui_slider_callback=lambda p: self.root.after(0, _apply_sliders, p),
+                )
+                out_wav = res.get("master_wav_path")
+                if out_wav:
+                    self.root.after(
+                        0,
+                        lambda: messagebox.showinfo(
+                            "Gemini On-the-Fly Master Ready",
+                            f"Tuned Master WAV written to:\n{out_wav}",
+                        ),
+                    )
+
+            threading.Thread(target=_worker, daemon=True).start()
+
+        tk.Button(
+            gem_frame,
+            text="✨ GEMINI TUNE MASTER MIX WAV",
+            command=_tune_master_wav_on_the_fly,
+            bg="#7aa2f7",
+            fg="#151922",
+            font=("Consolas", 9, "bold"),
+            padx=10,
+        ).pack(side="right", padx=4)
+
+    HMSStudioSingleFileGUI.__init__ = _patched_init
+
+
+_attach_gemini_controls_to_hms_gui()
+
+
+
+
+
+
+
+
+# ==============================================================================
+# 5 LIVE VST3 SLIDERS + AUTO-SAVE / LOAD MIX JSON EXTENSION FOR HMS STUDIO GUI
+# ==============================================================================
+def _attach_9_sliders_and_json_to_hms_gui():
+    if "HMSStudioSingleFileGUI" not in globals():
+        return
+
+    orig_init = HMSStudioSingleFileGUI.__init__
+
+    def _patched_9_slider_init(self, root):
+        orig_init(self, root)
+        if getattr(self, "_vst_9_sliders_attached", False):
+            return
+        self._vst_9_sliders_attached = True
+        globals()["_ACTIVE_HMS_GUI_INSTANCE"] = self
+
+        # 1. Expand window height so all panels and the log box fit comfortably on screen
+        try:
+            self.root.geometry("980x840")
+            self.root.minsize(920, 760)
+        except Exception:
+            pass
+
+        # 2. Locate the black log Text widget's top-level container and shrink its default height
+        log_pack_target = None
+        w = getattr(self, "status_box", None)
+        if w is not None:
+            try:
+                w.configure(height=6)
+            except Exception:
+                pass
+            p = w
+            while p is not None and getattr(p, "master", None) != self.root:
+                p = getattr(p, "master", None)
+            if p is not None:
+                log_pack_target = p
+
+        # Also move the Gemini 2.5 Flash bar ABOVE the log box so it isn't clipped at the bottom
+        for child in list(self.root.winfo_children()):
+            try:
+                title_txt = str(child.cget("text")) if "text" in child.keys() else ""
+                if "Gemini" in title_txt and log_pack_target is not None and child != log_pack_target:
+                    child.pack_forget()
+                    child.pack(fill="x", padx=14, pady=(2, 4), before=log_pack_target)
+            except Exception:
+                pass
+
+        # 3. Initialize the 5 new VST3 & Master Limiter DoubleVars
+        self.nova_pocket_db_var = tk.DoubleVar(value=-2.5)
+        self.mjuc_compress_var = tk.DoubleVar(value=18.0)
+        self.mjuc_makeup_var = tk.DoubleVar(value=1.5)
+        self.chow_drive_var = tk.DoubleVar(value=0.35)
+        self.master_ceiling_var = tk.DoubleVar(value=-0.3)
+
+        vst_frame = tk.LabelFrame(
+            self.root,
+            text=" 🎛️ VST3 Bus Levers & Mix Settings JSON (Auto-Saved on Every Render) ",
+            bg="#1e1e1e",
+            fg="#00ff88",
+            font=("Consolas", 10, "bold"),
+            padx=10,
+            pady=4,
+        )
+        if log_pack_target is not None:
+            vst_frame.pack(fill="x", padx=14, pady=(2, 4), before=log_pack_target)
+        else:
+            vst_frame.pack(fill="x", padx=14, pady=(2, 4))
+
+        vst_frame.columnconfigure(1, weight=1)
+        vst_frame.columnconfigure(3, weight=1)
+
+        # Row 0: Vocal Pocket (dB) & Vocal Comp (MJUCjr)
+        tk.Label(vst_frame, text="Vocal Pocket (dB)   :", bg="#1e1e1e", fg="#ff6b6b", font=("Consolas", 9, "bold")).grid(row=0, column=0, sticky="w", padx=(2, 6))
+        tk.Scale(vst_frame, variable=self.nova_pocket_db_var, from_=-6.0, to=0.0, resolution=0.1, orient="horizontal", bg="#1e1e1e", fg="#ff6b6b", troughcolor="#111111", highlightthickness=0, length=150).grid(row=0, column=1, sticky="ew", padx=4)
+
+        tk.Label(vst_frame, text="Vocal Comp (MJUCjr) :", bg="#1e1e1e", fg="#ff6b6b", font=("Consolas", 9, "bold")).grid(row=0, column=2, sticky="w", padx=(12, 6))
+        tk.Scale(vst_frame, variable=self.mjuc_compress_var, from_=0.0, to=40.0, resolution=0.5, orient="horizontal", bg="#1e1e1e", fg="#ff6b6b", troughcolor="#111111", highlightthickness=0, length=150).grid(row=0, column=3, sticky="ew", padx=4)
+
+        # Row 1: Vocal Makeup (dB) & Rhythm Tape Drive
+        tk.Label(vst_frame, text="Vocal Makeup (dB)   :", bg="#1e1e1e", fg="#f39c12", font=("Consolas", 9, "bold")).grid(row=1, column=0, sticky="w", padx=(2, 6))
+        tk.Scale(vst_frame, variable=self.mjuc_makeup_var, from_=0.0, to=6.0, resolution=0.1, orient="horizontal", bg="#1e1e1e", fg="#f39c12", troughcolor="#111111", highlightthickness=0, length=150).grid(row=1, column=1, sticky="ew", padx=4)
+
+        tk.Label(vst_frame, text="Rhythm Tape Drive   :", bg="#1e1e1e", fg="#f39c12", font=("Consolas", 9, "bold")).grid(row=1, column=2, sticky="w", padx=(12, 6))
+        tk.Scale(vst_frame, variable=self.chow_drive_var, from_=0.0, to=1.0, resolution=0.02, orient="horizontal", bg="#1e1e1e", fg="#f39c12", troughcolor="#111111", highlightthickness=0, length=150).grid(row=1, column=3, sticky="ew", padx=4)
+
+        # Row 2: Master Ceiling (dB) + Save / Load / Reset Buttons
+        tk.Label(vst_frame, text="Master Ceiling (dB) :", bg="#1e1e1e", fg="#00ff88", font=("Consolas", 9, "bold")).grid(row=2, column=0, sticky="w", padx=(2, 6))
+        tk.Scale(vst_frame, variable=self.master_ceiling_var, from_=-2.0, to=-0.1, resolution=0.1, orient="horizontal", bg="#1e1e1e", fg="#00ff88", troughcolor="#111111", highlightthickness=0, length=150).grid(row=2, column=1, sticky="ew", padx=4)
+
+        btn_row = tk.Frame(vst_frame, bg="#1e1e1e")
+        btn_row.grid(row=2, column=2, columnspan=2, sticky="ew", padx=4, pady=(4, 2))
+
+        tk.Button(
+            btn_row,
+            text="💾 Save Mix JSON",
+            command=self.save_mix_json_clicked,
+            bg="#1e4620",
+            fg="#ffffff",
+            font=("Consolas", 8, "bold"),
+            padx=6,
+            pady=3,
+        ).pack(side="left", expand=True, fill="x", padx=(0, 3))
+
+        tk.Button(
+            btn_row,
+            text="📂 Load Mix JSON",
+            command=self.load_mix_json_clicked,
+            bg="#1b3a57",
+            fg="#ffffff",
+            font=("Consolas", 8, "bold"),
+            padx=6,
+            pady=3,
+        ).pack(side="left", expand=True, fill="x", padx=3)
+
+        tk.Button(
+            btn_row,
+            text="↺ Reset 9 Sliders",
+            command=self.reset_all_9_sliders,
+            bg="#333333",
+            fg="#ffffff",
+            font=("Consolas", 8, "bold"),
+            padx=6,
+            pady=3,
+        ).pack(side="left", expand=True, fill="x", padx=(3, 0))
+
+    def _read_4_main_sliders(self):
+        v_var = getattr(self, "vocals_weight_var", getattr(self, "vox_weight_var", None))
+        r_var = getattr(self, "rhythm_weight_var", getattr(self, "rhy_weight_var", None))
+        m_var = getattr(self, "music_weight_var", getattr(self, "mus_weight_var", None))
+        g_var = getattr(self, "vocal_gate_db_var", getattr(self, "vocal_gate_var", None))
+        weights = {
+            "Vocals": round(float(v_var.get()), 3) if v_var else 1.08,
+            "Rhythm": round(float(r_var.get()), 3) if r_var else 1.04,
+            "Music": round(float(m_var.get()), 3) if m_var else 0.90,
+        }
+        gate_db = round(float(g_var.get()), 2) if g_var else -33.0
+        return weights, gate_db
+
+    def get_current_vst_overrides(self):
+        merged = dict(getattr(self, "vst_overrides", {}) or {})
+        merged.update({
+            "nova_music_pocket_db": round(float(self.nova_pocket_db_var.get()), 2),
+            "mjuc_compress": round(float(self.mjuc_compress_var.get()), 2),
+            "mjuc_makeup": round(float(self.mjuc_makeup_var.get()), 2),
+            "chow_rhythm_drive": round(float(self.chow_drive_var.get()), 3),
+            "master_ceiling_db": round(float(self.master_ceiling_var.get()), 2),
+        })
+        self.vst_overrides = merged
+        return merged
+
+    def apply_loaded_preset_to_sliders(self, preset_dict):
+        if not isinstance(preset_dict, dict):
+            return
+        bw = preset_dict.get("bus_weights", {})
+        v_var = getattr(self, "vocals_weight_var", getattr(self, "vox_weight_var", None))
+        r_var = getattr(self, "rhythm_weight_var", getattr(self, "rhy_weight_var", None))
+        m_var = getattr(self, "music_weight_var", getattr(self, "mus_weight_var", None))
+        g_var = getattr(self, "vocal_gate_db_var", getattr(self, "vocal_gate_var", None))
+
+        if v_var and "Vocals" in bw:
+            v_var.set(round(float(bw["Vocals"]), 2))
+        if r_var and "Rhythm" in bw:
+            r_var.set(round(float(bw["Rhythm"]), 2))
+        if m_var and "Music" in bw:
+            m_var.set(round(float(bw["Music"]), 2))
+        if g_var and "vocal_gate_db" in preset_dict:
+            g_var.set(round(float(preset_dict["vocal_gate_db"]), 1))
+
+        vst = preset_dict.get("vst_overrides", {})
+        if "nova_music_pocket_db" in vst:
+            self.nova_pocket_db_var.set(round(float(vst["nova_music_pocket_db"]), 2))
+        if "mjuc_compress" in vst:
+            self.mjuc_compress_var.set(round(float(vst["mjuc_compress"]), 2))
+        if "mjuc_makeup" in vst:
+            self.mjuc_makeup_var.set(round(float(vst["mjuc_makeup"]), 2))
+        if "chow_rhythm_drive" in vst:
+            self.chow_drive_var.set(round(float(vst["chow_rhythm_drive"]), 3))
+        if "master_ceiling_db" in vst:
+            self.master_ceiling_var.set(round(float(vst["master_ceiling_db"]), 2))
+        self.vst_overrides = dict(vst)
+
+    def reset_all_9_sliders(self):
+        if hasattr(self, "reset_slider_defaults"):
+            try:
+                self.reset_slider_defaults()
+            except Exception:
+                pass
+        self.nova_pocket_db_var.set(-2.5)
+        self.mjuc_compress_var.set(18.0)
+        self.mjuc_makeup_var.set(1.5)
+        self.chow_drive_var.set(0.35)
+        self.master_ceiling_var.set(-0.3)
+        self.get_current_vst_overrides()
+        print("[INFO] Reset all 9 sliders (4 Mix Balance + 5 VST3/Limiter Levers) to defaults.")
+
+    def _get_active_song_folder(self):
+        for attr in ("dest_dir_var", "source_dir_var", "src_var", "dst_var"):
+            var_obj = getattr(self, attr, None)
+            if var_obj:
+                val = var_obj.get().strip()
+                if val and os.path.isdir(val):
+                    return val
+        return ""
+
+    def save_mix_json_clicked(self):
+        target_dir = self._get_active_song_folder()
+        if not target_dir:
+            target_dir = filedialog.askdirectory(title="Select Song Folder to Save Mix Settings JSON")
+        if not target_dir:
+            return
+        weights, gate_db = self._read_4_main_sliders()
+        saved_path = save_song_mix_json(
+            song_dir=target_dir,
+            bus_weights=weights,
+            vocal_gate_db=gate_db,
+            mix_style=globals().get("HMS_MIX_STYLE_ACTIVE", "heavy"),
+            vst_overrides=self.get_current_vst_overrides(),
+        )
+        if saved_path:
+            messagebox.showinfo("Mix JSON Saved", f"Saved all 9 slider settings to:\n{saved_path}")
+
+    def load_mix_json_clicked(self):
+        start_dir = self._get_active_song_folder() or os.getcwd()
+        json_file = filedialog.askopenfilename(
+            title="Select Song Mix Settings JSON",
+            initialdir=start_dir if os.path.isdir(start_dir) else os.getcwd(),
+            filetypes=[("Mix Settings JSON", "*_MIX_SETTINGS.json *.json"), ("All Files", "*.*")],
+        )
+        if not json_file:
+            return
+        loaded = load_song_mix_json(json_file)
+        if loaded:
+            self.apply_loaded_preset_to_sliders(loaded)
+            messagebox.showinfo("Mix JSON Loaded", f"Applied 9-slider preset from:\n{os.path.basename(json_file)}")
+
+    HMSStudioSingleFileGUI.__init__ = _patched_9_slider_init
+    HMSStudioSingleFileGUI._read_4_main_sliders = _read_4_main_sliders
+    HMSStudioSingleFileGUI.get_current_vst_overrides = get_current_vst_overrides
+    HMSStudioSingleFileGUI.apply_loaded_preset_to_sliders = apply_loaded_preset_to_sliders
+    HMSStudioSingleFileGUI.reset_all_9_sliders = reset_all_9_sliders
+    HMSStudioSingleFileGUI._get_active_song_folder = _get_active_song_folder
+    HMSStudioSingleFileGUI.save_mix_json_clicked = save_mix_json_clicked
+    HMSStudioSingleFileGUI.load_mix_json_clicked = load_mix_json_clicked
+
+    _orig_render_master = globals().get("render_master_mixdown")
+    _orig_exec_cleanup = globals().get("execute_stem_cleanup")
+
+    if callable(_orig_render_master) and not getattr(_orig_render_master, "_is_9slider_wrapped", False):
+        def _wrapped_render_master(dest_song_dir, song_name=None, vst3_status=None, bus_weights=None, vocal_gate_db=-33.0, vst_overrides=None):
+            gui_inst = globals().get("_ACTIVE_HMS_GUI_INSTANCE")
+            if gui_inst is not None:
+                try:
+                    gui_weights, gui_gate = gui_inst._read_4_main_sliders()
+                    if bus_weights is None:
+                        bus_weights = gui_weights
+                    if vocal_gate_db == -33.0:
+                        vocal_gate_db = gui_gate
+                    if not vst_overrides:
+                        vst_overrides = gui_inst.get_current_vst_overrides()
+                except Exception:
+                    pass
+            return _orig_render_master(
+                dest_song_dir=dest_song_dir,
+                song_name=song_name,
+                vst3_status=vst3_status,
+                bus_weights=bus_weights,
+                vocal_gate_db=vocal_gate_db,
+                vst_overrides=vst_overrides,
+            )
+        _wrapped_render_master._is_9slider_wrapped = True
+        globals()["render_master_mixdown"] = _wrapped_render_master
+
+    if callable(_orig_exec_cleanup) and not getattr(_orig_exec_cleanup, "_is_9slider_wrapped", False):
+        def _wrapped_exec_cleanup(*args, **kwargs):
+            gui_inst = globals().get("_ACTIVE_HMS_GUI_INSTANCE")
+            if gui_inst is not None:
+                try:
+                    if not kwargs.get("vst_overrides"):
+                        kwargs["vst_overrides"] = gui_inst.get_current_vst_overrides()
+                except Exception:
+                    pass
+            return _orig_exec_cleanup(*args, **kwargs)
+        _wrapped_exec_cleanup._is_9slider_wrapped = True
+        globals()["execute_stem_cleanup"] = _wrapped_exec_cleanup
+
+
+_attach_9_sliders_and_json_to_hms_gui()
 
 
 if __name__ == "__main__":
