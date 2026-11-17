@@ -1383,6 +1383,9 @@
 
 
 
+
+
+
 <!-- HMS_CHROME_FULL_BRIDGE_V2 -->
 <script>
 (function() {
@@ -1553,6 +1556,137 @@
       }
     }, 350);
   });
+})();
+</script>
+
+
+<!-- HMS_AB_MASTER_AUDITION_DECK_V1 -->
+<script>
+(function() {
+  const API_BASE = window.location.origin.startsWith("http")
+    ? window.location.origin
+    : "http://127.0.0.1:8765";
+
+  function mountAbAuditionBar() {
+    if (document.getElementById("hms-ab-audition-bar")) return;
+    const deck = document.querySelector(".audition-deck");
+    if (!deck) return;
+
+    const bar = document.createElement("div");
+    bar.id = "hms-ab-audition-bar";
+    bar.style.cssText = "display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;padding-top:6px;border-top:1px solid #162032;";
+    bar.innerHTML = `
+      <div style="display:flex;align-items:center;gap:6px;flex:1;min-width:260px;">
+        <span style="font-size:11px;font-weight:700;color:#00f0ff;white-space:nowrap;">🎧 A/B Audition:</span>
+        <select id="hms-ab-track-select" style="flex:1;background:#090d16;color:#f1f5f9;border:1px solid #263248;border-radius:5px;padding:4px 8px;font-size:11px;font-family:Consolas,monospace;">
+          <option value="">-- Click '↻ Scan Folder WAVs' to load Master & Stems --</option>
+        </select>
+        <button id="hms-ab-scan-btn" type="button" style="padding:4px 9px;font-size:11px;">↻ Scan Folder WAVs</button>
+      </div>
+      <div style="display:flex;align-items:center;gap:6px;flex:1;min-width:240px;">
+        <input type="range" id="hms-ab-seek-slider" min="0" max="100" step="0.1" value="0" style="flex:1;" />
+        <span id="hms-ab-time-readout" style="font-family:Consolas,monospace;font-size:11px;color:#ffb800;min-width:82px;text-align:right;">0:00 / 0:00</span>
+      </div>
+    `;
+    deck.appendChild(bar);
+
+    const player = document.getElementById("htmlAudioPlayer");
+    const selectEl = document.getElementById("hms-ab-track-select");
+    const scanBtn = document.getElementById("hms-ab-scan-btn");
+    const seekSlider = document.getElementById("hms-ab-seek-slider");
+    const timeReadout = document.getElementById("hms-ab-time-readout");
+
+    function fmtTime(sec) {
+      if (!isFinite(sec) || sec < 0) return "0:00";
+      const m = Math.floor(sec / 60);
+      const s = Math.floor(sec % 60);
+      return m + ":" + (s < 10 ? "0" : "") + s;
+    }
+
+    window.scanAndPopulateSongWavs = async function(autoPlayMaster = false) {
+      const songDir = (document.getElementById("songDirInput")?.value || "").trim();
+      const destRoot = (document.getElementById("destRootInput")?.value || "").trim();
+      if (!songDir) return;
+
+      try {
+        const url = `${API_BASE}/api/list_song_wavs?song_dir=${encodeURIComponent(songDir)}&dest_root=${encodeURIComponent(destRoot)}`;
+        const r = await fetch(url);
+        const data = await r.json();
+        if (data.status === "ok" && Array.isArray(data.tracks)) {
+          selectEl.innerHTML = "";
+          if (data.tracks.length === 0) {
+            selectEl.innerHTML = `<option value="">[No WAV files found in folder]</option>`;
+            return;
+          }
+          let masterPath = "";
+          for (const t of data.tracks) {
+            const opt = document.createElement("option");
+            opt.value = t.path;
+            opt.textContent = `${t.badge} | ${t.name} (${t.size_mb} MB)`;
+            selectEl.appendChild(opt);
+            if (!masterPath && t.category === "1_MASTER") masterPath = t.path;
+          }
+          appendLog(`[SUCCESS] Found ${data.tracks.length} auditionable audio track(s) in workspace.`, "ok");
+          if (autoPlayMaster && masterPath) {
+            selectEl.value = masterPath;
+            window.streamDiskWavInDeck(masterPath);
+          }
+        }
+      } catch (e) {}
+    };
+
+    window.streamDiskWavInDeck = function(fullPath) {
+      if (!fullPath) return;
+      ensureAudioContext();
+      const currentTime = player.currentTime || 0;
+      const wasPlaying = !player.paused;
+
+      player.src = `${API_BASE}/api/stream_wav?path=${encodeURIComponent(fullPath)}`;
+      const shortName = fullPath.split(/[\\/]/).pop();
+      document.getElementById("loadedAudioLabel").textContent = shortName;
+      document.getElementById("playPauseWavBtn").disabled = false;
+
+      if (!mediaSource) {
+        mediaSource = audioCtx.createMediaElementSource(player);
+        mediaSource.connect(analyser);
+        analyser.connect(audioCtx.destination);
+      }
+
+      player.onloadedmetadata = () => {
+        // Preserve timestamp when A/B switching between stems & Master Mix!
+        if (currentTime > 0 && currentTime < player.duration - 1) {
+          player.currentTime = currentTime;
+        }
+        if (wasPlaying || true) player.play();
+      };
+      appendLog(`[RUN] Auditioning from disk: ${shortName}`, "run");
+    };
+
+    selectEl.addEventListener("change", () => {
+      if (selectEl.value) window.streamDiskWavInDeck(selectEl.value);
+    });
+
+    scanBtn.addEventListener("click", () => window.scanAndPopulateSongWavs(false));
+
+    player.addEventListener("timeupdate", () => {
+      if (player.duration > 0) {
+        seekSlider.value = ((player.currentTime / player.duration) * 100).toFixed(2);
+        timeReadout.textContent = `${fmtTime(player.currentTime)} / ${fmtTime(player.duration)}`;
+      }
+    });
+
+    seekSlider.addEventListener("input", () => {
+      if (player.duration > 0) {
+        player.currentTime = (parseFloat(seekSlider.value) / 100.0) * player.duration;
+      }
+    });
+
+    // Automatically scan tracks on startup and whenever songDirInput changes
+    document.getElementById("songDirInput")?.addEventListener("change", () => window.scanAndPopulateSongWavs(false));
+    setTimeout(() => window.scanAndPopulateSongWavs(false), 800);
+  }
+
+  window.addEventListener("DOMContentLoaded", mountAbAuditionBar);
 })();
 </script>
 

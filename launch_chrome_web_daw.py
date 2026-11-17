@@ -452,5 +452,151 @@ def main():
         server.shutdown()
 
 
+
+
+# === CHROME_DAW_WAV_STREAMER_PATCH_V1 ===
+from urllib.parse import parse_qs, urlparse, unquote
+
+def _scan_song_audio_files(song_dir, dest_root=""):
+    results = []
+    seen_paths = set()
+
+    if not song_dir:
+        return results
+
+    norm_song = os.path.normpath(song_dir.strip())
+    song_name = os.path.basename(norm_song)
+    if song_name.endswith("_Stems"):
+        base_song_name = song_name[:-6]
+    else:
+        base_song_name = song_name
+
+    search_dirs = []
+    if dest_root and os.path.isdir(dest_root.strip()):
+        for candidate_name in (song_name, base_song_name):
+            cand_dir = os.path.join(os.path.normpath(dest_root.strip()), candidate_name)
+            if os.path.isdir(cand_dir) and cand_dir not in search_dirs:
+                search_dirs.append(cand_dir)
+
+    if os.path.isdir(norm_song) and norm_song not in search_dirs:
+        search_dirs.append(norm_song)
+
+    for s_dir in search_dirs:
+        for root_dir, _, files in os.walk(s_dir):
+            if "_HMS_Rollback_Vault" in root_dir:
+                continue
+            for fn in sorted(files):
+                if not fn.lower().endswith((".wav", ".flac", ".mp3")):
+                    continue
+                full_p = os.path.normpath(os.path.join(root_dir, fn))
+                if full_p in seen_paths:
+                    continue
+                seen_paths.add(full_p)
+
+                upper_fn = fn.upper()
+                if "MASTER_MIX" in upper_fn:
+                    category = "1_MASTER"
+                    badge = "★ MASTER MIX"
+                elif "GLUED" in upper_fn:
+                    category = "2_GLUED"
+                    badge = "● GLUED BUS"
+                elif "CLEAN" in upper_fn:
+                    category = "3_CLEAN"
+                    badge = "✓ CLEAN STEM"
+                else:
+                    category = "4_RAW"
+                    badge = "○ RAW STEM"
+
+                results.append({
+                    "name": fn,
+                    "path": full_p,
+                    "category": category,
+                    "badge": badge,
+                    "size_mb": round(os.path.getsize(full_p) / (1024 * 1024), 2),
+                })
+
+    results.sort(key=lambda x: (x["category"], x["name"]))
+    return results
+
+
+def _attach_wav_streamer_to_chrome_handler():
+    orig_do_get = ChromeDAWRequestHandler.do_GET
+
+    def _stream_do_get(self):
+        parsed = urlparse(self.path)
+        clean_path = parsed.path
+        qs = parse_qs(parsed.query)
+
+        if clean_path == "/api/list_song_wavs":
+            song_dir = (qs.get("song_dir", [""])[0] or "").strip()
+            dest_root = (qs.get("dest_root", [""])[0] or "").strip()
+            tracks = _scan_song_audio_files(song_dir, dest_root)
+            self._send_json(200, {"status": "ok", "count": len(tracks), "tracks": tracks})
+            return
+
+        if clean_path == "/api/stream_wav":
+            raw_path = unquote(qs.get("path", [""])[0] or "").strip()
+            norm_p = os.path.normpath(raw_path)
+            if not raw_path or not os.path.isfile(norm_p):
+                self._send_json(404, {"status": "error", "message": f"Audio file not found: {norm_p}"})
+                return
+
+            try:
+                file_size = os.path.getsize(norm_p)
+                ext = os.path.splitext(norm_p)[1].lower()
+                mime = "audio/flac" if ext == ".flac" else "audio/mpeg" if ext == ".mp3" else "audio/wav"
+
+                range_header = self.headers.get("Range")
+                if range_header and range_header.startswith("bytes="):
+                    byte_range = range_header.split("=")[1].split("-")
+                    start_b = int(byte_range[0]) if byte_range[0] else 0
+                    end_b = int(byte_range[1]) if (len(byte_range) > 1 and byte_range[1]) else file_size - 1
+                    end_b = min(end_b, file_size - 1)
+                    chunk_len = max(0, end_b - start_b + 1)
+
+                    self.send_response(206)
+                    self.send_header("Content-Type", mime)
+                    self.send_header("Accept-Ranges", "bytes")
+                    self.send_header("Content-Range", f"bytes {start_b}-{end_b}/{file_size}")
+                    self.send_header("Content-Length", str(chunk_len))
+                    self._send_cors_headers()
+                    self.end_headers()
+
+                    with open(norm_p, "rb") as af:
+                        af.seek(start_b)
+                        remaining = chunk_len
+                        while remaining > 0:
+                            buf = af.read(min(65536, remaining))
+                            if not buf:
+                                break
+                            self.wfile.write(buf)
+                            remaining -= len(buf)
+                else:
+                    self.send_response(200)
+                    self.send_header("Content-Type", mime)
+                    self.send_header("Accept-Ranges", "bytes")
+                    self.send_header("Content-Length", str(file_size))
+                    self._send_cors_headers()
+                    self.end_headers()
+                    with open(norm_p, "rb") as af:
+                        while True:
+                            buf = af.read(65536)
+                            if not buf:
+                                break
+                            self.wfile.write(buf)
+            except (ConnectionAbortedError, BrokenPipeError):
+                pass
+            except Exception:
+                print(traceback.format_exc())
+            return
+
+        return orig_do_get(self)
+
+    ChromeDAWRequestHandler.do_GET = _stream_do_get
+
+
+_attach_wav_streamer_to_chrome_handler()
+
+
 if __name__ == "__main__":
     main()
