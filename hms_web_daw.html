@@ -1,0 +1,858 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>337 West Productions — HMS Unified Studio Suite v1.3 (Web-DAW)</title>
+<style>
+  :root {
+    --bg-deep: #07090e;
+    --bg-panel: #0d111a;
+    --bg-card: #131926;
+    --border-dim: #1e293b;
+    --cyan-neon: #00f0ff;
+    --amber-neon: #ffb800;
+    --emerald-neon: #10b981;
+    --rose-neon: #f43f5e;
+    --violet-neon: #8b5cf6;
+    --text-main: #f1f5f9;
+    --text-muted: #94a3b8;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
+  body {
+    background: var(--bg-deep);
+    color: var(--text-main);
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow-x: hidden;
+  }
+  /* TOP HEADER */
+  header {
+    background: linear-gradient(90deg, #090d16 0%, #111827 50%, #090d16 100%);
+    border-bottom: 1px solid var(--border-dim);
+    padding: 10px 18px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    flex-wrap: wrap;
+  }
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .brand-badge {
+    background: linear-gradient(135deg, var(--cyan-neon), var(--violet-neon));
+    color: #030712;
+    font-weight: 900;
+    font-size: 13px;
+    padding: 5px 10px;
+    border-radius: 6px;
+    letter-spacing: 1px;
+    box-shadow: 0 0 14px rgba(0, 240, 255, 0.35);
+  }
+  .brand-title {
+    font-size: 16px;
+    font-weight: 800;
+    letter-spacing: 0.6px;
+    color: #fff;
+  }
+  .brand-sub {
+    font-size: 11px;
+    color: var(--cyan-neon);
+    font-family: Consolas, monospace;
+  }
+  .status-pills {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .pill {
+    background: #0f172a;
+    border: 1px solid #1e293b;
+    padding: 5px 10px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-family: Consolas, monospace;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--emerald-neon);
+    box-shadow: 0 0 8px var(--emerald-neon);
+  }
+  .dot.warn { background: var(--amber-neon); box-shadow: 0 0 8px var(--amber-neon); }
+
+  /* MAIN STUDIO GRID */
+  .studio-grid {
+    display: grid;
+    grid-template-columns: 350px 1fr;
+    gap: 12px;
+    padding: 12px 16px;
+    flex: 1;
+  }
+  @media (max-width: 1100px) {
+    .studio-grid { grid-template-columns: 1fr; }
+  }
+  .panel {
+    background: var(--bg-panel);
+    border: 1px solid var(--border-dim);
+    border-radius: 10px;
+    padding: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.45);
+  }
+  .panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border-bottom: 1px solid var(--border-dim);
+    padding-bottom: 8px;
+  }
+  .panel-title {
+    font-size: 12px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 1.1px;
+    color: var(--cyan-neon);
+  }
+
+  /* FORM CONTROLS */
+  label.field-label {
+    font-size: 11px;
+    color: var(--text-muted);
+    font-weight: 600;
+    margin-bottom: 4px;
+    display: block;
+  }
+  .input-row {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+  }
+  input[type="text"], input[type="password"], select {
+    background: #070a10;
+    border: 1px solid #263248;
+    color: var(--text-main);
+    padding: 7px 10px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-family: Consolas, monospace;
+    width: 100%;
+    outline: none;
+  }
+  input[type="text"]:focus, input[type="password"]:focus, select:focus {
+    border-color: var(--cyan-neon);
+    box-shadow: 0 0 8px rgba(0, 240, 255, 0.2);
+  }
+  button {
+    background: #1e293b;
+    color: #fff;
+    border: 1px solid #334155;
+    padding: 7px 12px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    white-space: nowrap;
+  }
+  button:hover {
+    border-color: var(--cyan-neon);
+    background: #26354d;
+  }
+  button.btn-cyan {
+    background: linear-gradient(135deg, #0284c7, #00f0ff);
+    color: #020617;
+    border: none;
+    box-shadow: 0 0 12px rgba(0, 240, 255, 0.25);
+  }
+  button.btn-emerald {
+    background: linear-gradient(135deg, #059669, #10b981);
+    color: #022c22;
+    border: none;
+    box-shadow: 0 0 12px rgba(16, 185, 129, 0.25);
+  }
+  button.btn-amber {
+    background: linear-gradient(135deg, #d97706, #ffb800);
+    color: #1c1917;
+    border: none;
+  }
+  button.btn-violet {
+    background: linear-gradient(135deg, #6d28d9, #8b5cf6);
+    color: #fff;
+    border: none;
+  }
+  button.btn-rose {
+    background: linear-gradient(135deg, #be123c, #f43f5e);
+    color: #fff;
+    border: none;
+  }
+
+  /* SPECTRUM & WAVEFORM DECK */
+  .audition-deck {
+    background: #05070b;
+    border: 1px solid #1e293b;
+    border-radius: 8px;
+    padding: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  canvas#spectrumCanvas {
+    width: 100%;
+    height: 115px;
+    background: radial-gradient(circle at center, #0b1324 0%, #040609 100%);
+    border-radius: 6px;
+    border: 1px solid #162032;
+  }
+  .deck-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  /* GROUP A FADERS & GROUP B KNOBS */
+  .rack-grid {
+    display: grid;
+    grid-template-columns: 1fr 1.6fr;
+    gap: 12px;
+  }
+  @media (max-width: 900px) {
+    .rack-grid { grid-template-columns: 1fr; }
+  }
+  .sub-rack {
+    background: var(--bg-card);
+    border: 1px solid #1e293b;
+    border-radius: 8px;
+    padding: 12px;
+  }
+  .fader-row {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-bottom: 12px;
+    background: #090d15;
+    padding: 8px 10px;
+    border-radius: 6px;
+    border: 1px solid #1a2436;
+  }
+  .fader-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 12px;
+    font-weight: 700;
+  }
+  .fader-val {
+    font-family: Consolas, monospace;
+    color: var(--cyan-neon);
+  }
+  input[type="range"] {
+    -webkit-appearance: none;
+    width: 100%;
+    height: 6px;
+    background: #1e293b;
+    border-radius: 4px;
+    outline: none;
+  }
+  input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: var(--cyan-neon);
+    box-shadow: 0 0 8px var(--cyan-neon);
+    cursor: pointer;
+  }
+
+  .knobs-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 10px;
+    margin-top: 8px;
+  }
+  .knob-card {
+    background: #090d15;
+    border: 1px solid #1a2436;
+    border-radius: 8px;
+    padding: 10px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    text-align: center;
+  }
+  .knob-title {
+    font-size: 11px;
+    font-weight: 700;
+    color: #cbd5e1;
+  }
+  .knob-readout {
+    font-family: Consolas, monospace;
+    font-size: 12px;
+    color: var(--amber-neon);
+    font-weight: 700;
+  }
+
+  /* ACTION BAR */
+  .action-bar {
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    gap: 8px;
+  }
+  @media (max-width: 1000px) {
+    .action-bar { grid-template-columns: repeat(2, 1fr); }
+  }
+
+  /* TERMINAL LOG */
+  .terminal {
+    background: #04060a;
+    border: 1px solid #1e293b;
+    border-radius: 8px;
+    padding: 10px;
+    font-family: Consolas, 'Courier New', monospace;
+    font-size: 12px;
+    height: 185px;
+    overflow-y: auto;
+    line-height: 1.45;
+    user-select: text;
+  }
+  .log-info { color: #38bdf8; }
+  .log-run { color: #facc15; }
+  .log-ok { color: #4ade80; font-weight: 700; }
+  .log-err { color: #fb7185; font-weight: 700; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <span class="brand-badge">337 WEST</span>
+    <div>
+      <div class="brand-title">HMS UNIFIED STUDIO SUITE v1.3 — WEB-DAW</div>
+      <div class="brand-sub">MVSep Cloud Demux • VST3 Pedalboard Engine (TDR Nova / MJUCjr / CHOWTape) • Gemini 2.5 Flash</div>
+    </div>
+  </div>
+  <div class="status-pills">
+    <div class="pill"><span id="bridgeDot" class="dot warn"></span><span id="bridgeStatusText">Bridge: Checking...</span></div>
+    <div class="pill"><span class="dot"></span><span>24-Bit / 44.1–48kHz PCM</span></div>
+    <button onclick="resetAllSliders()">↺ Reset 9 Studio Defaults</button>
+  </div>
+</header>
+
+<div class="studio-grid">
+  <!-- LEFT COLUMN: CREDENTIALS, FOLDERS & MVSEP -->
+  <div class="panel">
+    <div class="panel-header">
+      <span class="panel-title">1. Workspace & API Vault</span>
+      <button onclick="saveApiCredentials()">💾 Save Keys</button>
+    </div>
+
+    <div>
+      <label class="field-label">MVSep API Token (~/.mvsep_hms_config.json)</label>
+      <input type="password" id="mvsepTokenInput" placeholder="Paste MVSep Token..." />
+    </div>
+
+    <div>
+      <label class="field-label">Gemini 2.5 Flash API Key</label>
+      <input type="password" id="geminiKeyInput" placeholder="Paste Gemini API Key..." />
+    </div>
+
+    <hr style="border:0; border-top:1px solid #1e293b; margin: 2px 0;" />
+
+    <div>
+      <label class="field-label">Source Song Stems Folder (Raw WAV Stems)</label>
+      <div class="input-row">
+        <input type="text" id="songDirInput" value="H:\suno projects\Sensory_Bleed" />
+        <button onclick="browseSongFolder()">Browse...</button>
+      </div>
+    </div>
+
+    <div>
+      <label class="field-label">FL Studio / Cleaned Output Destination Root</label>
+      <div class="input-row">
+        <input type="text" id="destRootInput" value="C:\Users\racer\OneDrive\Documents\Image-Line\FL Studio\Projects" />
+        <button onclick="browseDestFolder()">Browse...</button>
+      </div>
+    </div>
+
+    <div>
+      <label class="field-label">HMS Mix Style Mode Switch</label>
+      <select id="mixStyleSelect" onchange="applyPresetFromDropdown(this.value)">
+        <option value="auto">Auto-Detect (Gemini / Mid-Side Telemetry)</option>
+        <option value="heavy">Heavy Metal / Industrial (Nu-Metal Wall)</option>
+        <option value="acoustic">Acoustic / Dynamic Rock (Preserve Center Guitars)</option>
+      </select>
+    </div>
+
+    <div class="panel-header" style="margin-top:6px;">
+      <span class="panel-title">2. Preset JSON Manager</span>
+    </div>
+    <div class="input-row">
+      <button style="flex:1;" onclick="exportMixJson()">⬇ Export MIX_SETTINGS.json</button>
+      <button style="flex:1;" onclick="document.getElementById('jsonFilePicker').click()">⬆ Load JSON</button>
+      <input type="file" id="jsonFilePicker" accept=".json" style="display:none" onchange="importMixJsonFile(event)" />
+    </div>
+  </div>
+
+  <!-- RIGHT COLUMN: SPECTRUM DECK, 9 SLIDERS & EXECUTION -->
+  <div class="panel">
+    <!-- REAL-TIME AUDITION & FFT SPECTRUM DECK -->
+    <div class="audition-deck">
+      <div class="deck-toolbar">
+        <div style="display:flex; align-items:center; gap:8px;">
+          <span class="panel-title" style="color:var(--emerald-neon);">Real-Time FFT Spectrum & WAV Audition Deck</span>
+          <span id="loadedAudioLabel" style="font-size:11px; color:var(--text-muted); font-family:Consolas,monospace;">[No WAV Loaded]</span>
+        </div>
+        <div style="display:flex; gap:6px;">
+          <button class="btn-cyan" onclick="toggleTestSynth()" id="synthBtn">▶ Test Stem Signal</button>
+          <button onclick="document.getElementById('wavFilePicker').click()">📂 Load WAV / Master</button>
+          <input type="file" id="wavFilePicker" accept="audio/*" style="display:none" onchange="loadLocalAudioFile(event)" />
+          <button id="playPauseWavBtn" onclick="toggleWavPlayback()" disabled>⏯ Play / Pause</button>
+        </div>
+      </div>
+      <canvas id="spectrumCanvas" width="900" height="115"></canvas>
+      <audio id="htmlAudioPlayer" crossorigin="anonymous" style="display:none"></audio>
+    </div>
+
+    <!-- 9-SLIDER RACK (GROUP A + GROUP B) -->
+    <div class="rack-grid">
+      <!-- GROUP A: 3 BUS GAIN FADERS -->
+      <div class="sub-rack">
+        <div class="panel-header" style="margin-bottom:10px;">
+          <span class="panel-title">Group A — Bus Gain Faders (3s Glue)</span>
+        </div>
+
+        <div class="fader-row">
+          <div class="fader-top">
+            <span>1. VOCALS BUS GAIN</span>
+            <span class="fader-val" id="val_vocals">1.08x</span>
+          </div>
+          <input type="range" id="sl_vocals" min="0.50" max="1.50" step="0.01" value="1.08" oninput="updateReadout('vocals', this.value, 'x')" />
+        </div>
+
+        <div class="fader-row">
+          <div class="fader-top">
+            <span>2. RHYTHM BUS GAIN (Drums/Bass)</span>
+            <span class="fader-val" id="val_rhythm">1.04x</span>
+          </div>
+          <input type="range" id="sl_rhythm" min="0.50" max="1.50" step="0.01" value="1.04" oninput="updateReadout('rhythm', this.value, 'x')" />
+        </div>
+
+        <div class="fader-row" style="margin-bottom:0;">
+          <div class="fader-top">
+            <span>3. MUSIC BUS GAIN (Guitars/Synths)</span>
+            <span class="fader-val" id="val_music">0.90x</span>
+          </div>
+          <input type="range" id="sl_music" min="0.50" max="1.50" step="0.01" value="0.90" oninput="updateReadout('music', this.value, 'x')" />
+        </div>
+      </div>
+
+      <!-- GROUP B: 6 VST3 & DSP HARDWARE CONTROLS -->
+      <div class="sub-rack">
+        <div class="panel-header" style="margin-bottom:8px;">
+          <span class="panel-title" style="color:var(--amber-neon);">Group B — VST3 & Stem DSP Parameters (6 Controls)</span>
+        </div>
+
+        <div class="knobs-grid">
+          <div class="knob-card">
+            <div class="knob-title">4. Vocal Noise Gate</div>
+            <div class="knob-readout" id="val_gate">-33.0 dB</div>
+            <input type="range" id="sl_gate" min="-60.0" max="-18.0" step="0.5" value="-33.0" oninput="updateReadout('gate', this.value, ' dB')" />
+          </div>
+
+          <div class="knob-card">
+            <div class="knob-title">5. TDR Nova Pocket</div>
+            <div class="knob-readout" id="val_pocket">-2.5 dB</div>
+            <input type="range" id="sl_pocket" min="-6.0" max="0.0" step="0.1" value="-2.5" oninput="updateReadout('pocket', this.value, ' dB')" />
+          </div>
+
+          <div class="knob-card">
+            <div class="knob-title">6. MJUCjr Compress</div>
+            <div class="knob-readout" id="val_comp">18.0 %</div>
+            <input type="range" id="sl_comp" min="0.0" max="100.0" step="1.0" value="18.0" oninput="updateReadout('comp', this.value, ' %')" />
+          </div>
+
+          <div class="knob-card">
+            <div class="knob-title">7. MJUCjr Makeup</div>
+            <div class="knob-readout" id="val_makeup">1.5 dB</div>
+            <input type="range" id="sl_makeup" min="0.0" max="12.0" step="0.1" value="1.5" oninput="updateReadout('makeup', this.value, ' dB')" />
+          </div>
+
+          <div class="knob-card">
+            <div class="knob-title">8. CHOWTape Drive</div>
+            <div class="knob-readout" id="val_tape">0.35</div>
+            <input type="range" id="sl_tape" min="0.00" max="1.00" step="0.01" value="0.35" oninput="updateReadout('tape', this.value, '')" />
+          </div>
+
+          <div class="knob-card">
+            <div class="knob-title">9. Master Ceiling</div>
+            <div class="knob-readout" id="val_ceiling">-0.3 dB</div>
+            <input type="range" id="sl_ceiling" min="-3.0" max="-0.1" step="0.1" value="-0.3" oninput="updateReadout('ceiling', this.value, ' dB')" />
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 6 EXECUTION BUTTONS -->
+    <div class="action-bar">
+      <button class="btn-violet" onclick="triggerHmsAction('autotune')">0. AI Auto-Tune</button>
+      <button class="btn-cyan" onclick="triggerHmsAction('dry_run')">1. Dry-Run Audit</button>
+      <button class="btn-emerald" onclick="triggerHmsAction('live')">2. Full Live Clean</button>
+      <button class="btn-amber" onclick="triggerHmsAction('glue_only')">3. Glue Master (3s)</button>
+      <button class="btn-violet" onclick="triggerHmsAction('gemini_tune')">✨ Gemini Tune WAV</button>
+      <button class="btn-rose" onclick="triggerHmsAction('rollback')">4. Rollback Vault</button>
+    </div>
+
+    <!-- DIAGNOSTIC CONSOLE -->
+    <div class="terminal" id="terminalLog">
+      <div class="log-ok">[SUCCESS] 337 West Productions — HMS Web-DAW UI Initialized.</div>
+      <div class="log-info">[INFO] Checking connection to HMSWebDawBridge / http://127.0.0.1:8765 ...</div>
+    </div>
+  </div>
+</div>
+
+<script>
+  // ============================================================================
+  // 1. LOGGING & TELEMETRY
+  // ============================================================================
+  function appendLog(msg, level = "info") {
+    const term = document.getElementById("terminalLog");
+    const div = document.createElement("div");
+    div.className = level === "ok" ? "log-ok" : level === "run" ? "log-run" : level === "err" ? "log-err" : "log-info";
+    const ts = new Date().toLocaleTimeString();
+    div.textContent = `[${ts}] ${msg}`;
+    term.appendChild(div);
+    term.scrollTop = term.scrollHeight;
+  }
+
+  function updateReadout(key, val, unit) {
+    const num = parseFloat(val);
+    const formatted = (key === "vocals" || key === "rhythm" || key === "music" || key === "tape")
+      ? num.toFixed(2)
+      : num.toFixed(1);
+    document.getElementById("val_" + key).textContent = formatted + unit;
+  }
+
+  function get9SliderPayload(mode) {
+    return {
+      mode: mode,
+      song_dir: document.getElementById("songDirInput").value.trim(),
+      dest_root: document.getElementById("destRootInput").value.trim(),
+      mix_style: document.getElementById("mixStyleSelect").value,
+      vocal_gate_db: parseFloat(document.getElementById("sl_gate").value),
+      bus_weights: {
+        Vocals: parseFloat(document.getElementById("sl_vocals").value),
+        Rhythm: parseFloat(document.getElementById("sl_rhythm").value),
+        Music: parseFloat(document.getElementById("sl_music").value)
+      },
+      vst_overrides: {
+        nova_music_pocket_db: parseFloat(document.getElementById("sl_pocket").value),
+        mjuc_compress: parseFloat(document.getElementById("sl_comp").value),
+        mjuc_makeup: parseFloat(document.getElementById("sl_makeup").value),
+        chow_tape_drive: parseFloat(document.getElementById("sl_tape").value),
+        master_ceiling_db: parseFloat(document.getElementById("sl_ceiling").value)
+      }
+    };
+  }
+
+  function applyMixProfileToSliders(profile) {
+    if (!profile) return;
+    const bw = profile.bus_weights || {};
+    const vst = profile.vst_overrides || {};
+    if (bw.Vocals !== undefined) { document.getElementById("sl_vocals").value = bw.Vocals; updateReadout("vocals", bw.Vocals, "x"); }
+    if (bw.Rhythm !== undefined) { document.getElementById("sl_rhythm").value = bw.Rhythm; updateReadout("rhythm", bw.Rhythm, "x"); }
+    if (bw.Music !== undefined)  { document.getElementById("sl_music").value = bw.Music; updateReadout("music", bw.Music, "x"); }
+    if (profile.vocal_gate_db !== undefined) { document.getElementById("sl_gate").value = profile.vocal_gate_db; updateReadout("gate", profile.vocal_gate_db, " dB"); }
+    if (vst.nova_music_pocket_db !== undefined) { document.getElementById("sl_pocket").value = vst.nova_music_pocket_db; updateReadout("pocket", vst.nova_music_pocket_db, " dB"); }
+    if (vst.mjuc_compress !== undefined) { document.getElementById("sl_comp").value = vst.mjuc_compress; updateReadout("comp", vst.mjuc_compress, " %"); }
+    if (vst.mjuc_makeup !== undefined) { document.getElementById("sl_makeup").value = vst.mjuc_makeup; updateReadout("makeup", vst.mjuc_makeup, " dB"); }
+    if (vst.chow_tape_drive !== undefined) { document.getElementById("sl_tape").value = vst.chow_tape_drive; updateReadout("tape", vst.chow_tape_drive, ""); }
+    if (vst.master_ceiling_db !== undefined) { document.getElementById("sl_ceiling").value = vst.master_ceiling_db; updateReadout("ceiling", vst.master_ceiling_db, " dB"); }
+  }
+
+  function resetAllSliders() {
+    applyMixProfileToSliders({
+      vocal_gate_db: -33.0,
+      bus_weights: { Vocals: 1.08, Rhythm: 1.04, Music: 0.90 },
+      vst_overrides: {
+        nova_music_pocket_db: -2.5,
+        mjuc_compress: 18.0,
+        mjuc_makeup: 1.5,
+        chow_tape_drive: 0.35,
+        master_ceiling_db: -0.3
+      }
+    });
+    appendLog("[INFO] Reset all 9 sliders to 337 West Studio Defaults.", "info");
+  }
+
+  function applyPresetFromDropdown(style) {
+    if (style === "acoustic") {
+      applyMixProfileToSliders({
+        vocal_gate_db: -38.0,
+        bus_weights: { Vocals: 0.90, Rhythm: 1.02, Music: 0.98 },
+        vst_overrides: { nova_music_pocket_db: -1.0, mjuc_compress: 14.0, mjuc_makeup: 0.5, chow_tape_drive: 0.22, master_ceiling_db: -0.3 }
+      });
+      appendLog("[INFO] Loaded ACOUSTIC / DYNAMIC ROCK preset (Preserves center guitars).", "info");
+    } else if (style === "heavy") {
+      resetAllSliders();
+      appendLog("[INFO] Loaded HEAVY METAL / INDUSTRIAL preset (Nu-Metal Wall).", "info");
+    }
+  }
+
+  // ============================================================================
+  // 2. PYWEBVIEW & LOCAL REST API (:8765) BRIDGE
+  // ============================================================================
+  async function checkBackendConnection() {
+    const dot = document.getElementById("bridgeDot");
+    const txt = document.getElementById("bridgeStatusText");
+
+    if (window.pywebview && window.pywebview.api) {
+      try {
+        const st = await window.pywebview.api.get_status();
+        dot.className = "dot";
+        txt.textContent = "Bridge: pywebview Native Connected";
+        appendLog("[SUCCESS] Connected to native Python HMSWebDawBridge! VST3 status: " + JSON.stringify(st.vst3_status || {}), "ok");
+        return;
+      } catch (e) {}
+    }
+
+    try {
+      const r = await fetch("http://127.0.0.1:8765/health");
+      if (r.ok) {
+        dot.className = "dot";
+        txt.textContent = "Bridge: REST API (:8765) Online";
+        appendLog("[SUCCESS] Connected to Local HMS REST API at http://127.0.0.1:8765", "ok");
+        return;
+      }
+    } catch (e) {}
+
+    dot.className = "dot warn";
+    txt.textContent = "Bridge: Standalone Preview Mode";
+    appendLog("[INFO] Running in Standalone UI Mode (Launch via hms_web_daw_launcher.py for live VST3 execution).", "info");
+  }
+
+  async function browseSongFolder() {
+    if (window.pywebview && window.pywebview.api) {
+      const res = await window.pywebview.api.browse_folder("Select Song Stem Folder");
+      if (res && res.status === "ok" && res.path) {
+        document.getElementById("songDirInput").value = res.path;
+        appendLog("[SUCCESS] Selected Song Folder: " + res.path, "ok");
+        if (res.saved_mix) {
+          applyMixProfileToSliders(res.saved_mix);
+          appendLog("[SUCCESS] Auto-loaded saved MIX_SETTINGS.json from song folder!", "ok");
+        }
+      }
+    } else {
+      appendLog("[INFO] Native folder dialog requires launching via hms_web_daw_launcher.py.", "info");
+    }
+  }
+
+  async function browseDestFolder() {
+    if (window.pywebview && window.pywebview.api) {
+      const res = await window.pywebview.api.browse_folder("Select Destination Root Folder");
+      if (res && res.status === "ok" && res.path) {
+        document.getElementById("destRootInput").value = res.path;
+        appendLog("[SUCCESS] Selected Destination Folder: " + res.path, "ok");
+      }
+    } else {
+      appendLog("[INFO] Native folder dialog requires launching via hms_web_daw_launcher.py.", "info");
+    }
+  }
+
+  async function saveApiCredentials() {
+    const mv = document.getElementById("mvsepTokenInput").value.trim();
+    const gm = document.getElementById("geminiKeyInput").value.trim();
+    if (window.pywebview && window.pywebview.api && window.pywebview.api.save_credentials) {
+      const res = await window.pywebview.api.save_credentials(mv, gm);
+      appendLog("[SUCCESS] Saved API Credentials to ~/.mvsep_hms_config.json (" + res.status + ")", "ok");
+    } else {
+      appendLog("[INFO] Credentials staged in UI session.", "info");
+    }
+  }
+
+  async function triggerHmsAction(mode) {
+    const payload = get9SliderPayload(mode);
+    appendLog(`[RUN] Executing HMS Action '${mode.toUpperCase()}' on: ${payload.song_dir}`, "run");
+
+    if (window.pywebview && window.pywebview.api) {
+      try {
+        const res = await window.pywebview.api.run_clean(payload);
+        if (res.status === "ok") {
+          if (mode === "autotune" && res.profile) {
+            applyMixProfileToSliders(res.profile);
+          }
+          appendLog(`[SUCCESS] Completed '${mode}': ` + JSON.stringify(res), "ok");
+        } else {
+          appendLog(`[ERROR] '${mode}' failed: ` + (res.message || JSON.stringify(res)), "err");
+        }
+        return;
+      } catch (err) {
+        appendLog(`[ERROR] Bridge exception: ` + err, "err");
+        return;
+      }
+    }
+
+    try {
+      const r = await fetch("http://127.0.0.1:8765/api/clean", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      const data = await r.json();
+      appendLog(`[SUCCESS] REST API (:8765) Response: ` + JSON.stringify(data), "ok");
+    } catch (e) {
+      appendLog(`[INFO] Simulated '${mode}' payload ready: ` + JSON.stringify(payload), "info");
+    }
+  }
+
+  // ============================================================================
+  // 3. JSON PRESET EXPORT / IMPORT
+  // ============================================================================
+  function exportMixJson() {
+    const payload = get9SliderPayload("preset");
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "HMS_MIX_SETTINGS.json";
+    a.click();
+    appendLog("[SUCCESS] Exported 9-Slider HMS_MIX_SETTINGS.json!", "ok");
+  }
+
+  function importMixJsonFile(ev) {
+    const file = ev.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const data = JSON.parse(e.target.result);
+        applyMixProfileToSliders(data);
+        appendLog("[SUCCESS] Loaded 9-slider preset from: " + file.name, "ok");
+      } catch (err) {
+        appendLog("[ERROR] Invalid JSON preset file: " + err, "err");
+      }
+    };
+    reader.readAsText(file);
+  }
+
+  // ============================================================================
+  // 4. 60 FPS WEB AUDIO FFT SPECTRUM & TEST SIGNAL SYNTH
+  // ============================================================================
+  let audioCtx = null;
+  let analyser = null;
+  let synthOsc = null;
+  let synthGain = null;
+  let mediaSource = null;
+
+  function ensureAudioContext() {
+    if (!audioCtx) {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 256;
+    }
+    if (audioCtx.state === "suspended") audioCtx.resume();
+  }
+
+  function toggleTestSynth() {
+    ensureAudioContext();
+    const btn = document.getElementById("synthBtn");
+    if (synthOsc) {
+      synthOsc.stop();
+      synthOsc.disconnect();
+      synthOsc = null;
+      btn.textContent = "▶ Test Stem Signal";
+      appendLog("[INFO] Stopped test stem signal generator.", "info");
+      return;
+    }
+    synthOsc = audioCtx.createOscillator();
+    synthGain = audioCtx.createGain();
+    synthOsc.type = "sawtooth";
+    synthOsc.frequency.setValueAtTime(110, audioCtx.currentTime);
+    synthGain.gain.setValueAtTime(0.08, audioCtx.currentTime);
+    synthOsc.connect(synthGain);
+    synthGain.connect(analyser);
+    analyser.connect(audioCtx.destination);
+    synthOsc.start();
+    btn.textContent = "⏹ Stop Test Signal";
+    appendLog("[RUN] Playing live 110 Hz Sawtooth test stem signal through FFT analyzer...", "run");
+  }
+
+  function loadLocalAudioFile(ev) {
+    const file = ev.target.files[0];
+    if (!file) return;
+    ensureAudioContext();
+    const player = document.getElementById("htmlAudioPlayer");
+    player.src = URL.createObjectURL(file);
+    document.getElementById("loadedAudioLabel").textContent = file.name;
+    document.getElementById("playPauseWavBtn").disabled = false;
+    if (!mediaSource) {
+      mediaSource = audioCtx.createMediaElementSource(player);
+      mediaSource.connect(analyser);
+      analyser.connect(audioCtx.destination);
+    }
+    player.play();
+    appendLog("[SUCCESS] Auditioning local WAV file: " + file.name, "ok");
+  }
+
+  function toggleWavPlayback() {
+    const player = document.getElementById("htmlAudioPlayer");
+    if (player.paused) player.play();
+    else player.pause();
+  }
+
+  function renderSpectrumLoop() {
+    requestAnimationFrame(renderSpectrumLoop);
+    const canvas = document.getElementById("spectrumCanvas");
+    const ctx = canvas.getContext("2d");
+    const W = canvas.width;
+    const H = canvas.height;
+    ctx.clearRect(0, 0, W, H);
+
+    // Subtle grid lines
+    ctx.strokeStyle = "rgba(30, 41, 59, 0.5)";
+    ctx.lineWidth = 1;
+    for (let y = 25; y < H; y += 28) {
+      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+    }
+
+    if (!analyser) return;
+    const bufLen = analyser.frequencyBinCount;
+    const data = new Uint8Array(bufLen);
+    analyser.getByteFrequencyData(data);
+
+    const barW = (W / bufLen) * 1.8;
+    let x = 0;
+    for (let i = 0; i < bufLen; i++) {
+      const v = data[i] / 255.0;
+      const barH = v * (H - 10);
+      const grad = ctx.createLinearGradient(0, H, 0, 0);
+      grad.addColorStop(0, "#00f0ff");
+      grad.addColorStop(0.65, "#8b5cf6");
+      grad.addColorStop(1, "#f43f5e");
+      ctx.fillStyle = grad;
+      ctx.fillRect(x, H - barH, barW - 2, barH);
+      x += barW;
+    }
+  }
+
+  window.addEventListener("DOMContentLoaded", () => {
+    renderSpectrumLoop();
+    setTimeout(checkBackendConnection, 400);
+  });
+  window.addEventListener("pywebviewready", checkBackendConnection);
+</script>
+</body>
+</html>

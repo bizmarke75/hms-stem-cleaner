@@ -169,3 +169,8 @@ This utility automates the sorting, de-echoing, VST3 DSP cleanup, bus gluing, an
 
 ### 4. Repository Declutter & Archive Organization
 - Moved all one-time diagnostic, test, and patch scripts into `_archive_diagnostics\` so the repository root contains only clean production modules.
+
+---
+## 8. v1.3 Web-DAW Frontend & PyWebView Bridge Update (2026-11-17)
+- Added hms_web_daw.html (60 FPS FFT spectrum analyzer, WAV audition deck, 9-slider hardware rack, JSON preset manager).
+- Added hms_web_daw_launcher.py (native Windows Edge WebView2 desktop bridge + auto-starting 127.0.0.1:8765 REST server).
