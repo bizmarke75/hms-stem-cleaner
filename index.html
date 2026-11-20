@@ -1,0 +1,930 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>HMS Stem Cleaner — Local Web DAW</title>
+  <style>
+    :root {
+      --bg-app: #0d0f12;
+      --bg-panel: #14171c;
+      --bg-card: #1a1e25;
+      --bg-input: #0e1014;
+      --border: #2a2f3a;
+      --border-strong: #3b4252;
+      --text-main: #e2e8f0;
+      --text-bright: #f8fafc;
+      --text-muted: #94a3b8;
+      --accent: #e11d48;
+      --accent-hover: #be123c;
+      --amber: #f59e0b;
+      --emerald: #10b981;
+      --danger: #ef4444;
+      --sky: #38bdf8;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      padding: 20px;
+      background: var(--bg-app);
+      color: var(--text-main);
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      line-height: 1.45;
+    }
+
+    .daw-shell {
+      max-width: 1240px;
+      margin: 0 auto;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    /* Top Bar */
+    .topbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px 18px;
+      background: var(--bg-panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .brand-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--accent);
+      box-shadow: 0 0 10px var(--accent);
+    }
+
+    .brand h1 {
+      margin: 0;
+      font-size: 1.15rem;
+      letter-spacing: 0.03em;
+      color: var(--text-bright);
+    }
+
+    .bridge-pill {
+      font-size: 0.76rem;
+      font-family: monospace;
+      padding: 4px 10px;
+      border-radius: 999px;
+      border: 1px solid var(--border-strong);
+      background: #1f242d;
+      color: var(--amber);
+    }
+
+    .bridge-pill.connected {
+      border-color: #065f46;
+      background: #064e3b;
+      color: #6ee7b7;
+    }
+
+    .bridge-pill.offline {
+      border-color: #7f1d1d;
+      background: #450a0a;
+      color: #fca5a5;
+    }
+
+    /* Panels */
+    .daw-panel {
+      background: var(--bg-panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 18px 20px;
+    }
+
+    .panel-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 12px;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 12px;
+      margin-bottom: 14px;
+    }
+
+    .panel-header h2 {
+      margin: 0 0 3px 0;
+      font-size: 1.05rem;
+      color: var(--text-bright);
+    }
+
+    .muted-text {
+      margin: 0;
+      font-size: 0.84rem;
+      color: var(--text-muted);
+    }
+
+    .controls-row {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+
+    .grid-2 {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 14px;
+    }
+
+    .field-label {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 0.82rem;
+      color: var(--text-muted);
+      margin-bottom: 6px;
+    }
+
+    .input-group {
+      display: flex;
+      gap: 8px;
+    }
+
+    .daw-input,
+    .daw-select {
+      width: 100%;
+      padding: 8px 10px;
+      background: var(--bg-input);
+      border: 1px solid var(--border-strong);
+      border-radius: 5px;
+      color: var(--text-bright);
+      font-family: monospace;
+      font-size: 0.85rem;
+      outline: none;
+    }
+
+    .daw-input:focus,
+    .daw-select:focus {
+      border-color: var(--sky);
+    }
+
+    .daw-select {
+      width: auto;
+      font-family: 'Segoe UI', system-ui, sans-serif;
+    }
+
+    /* Buttons */
+    .btn {
+      padding: 8px 14px;
+      border-radius: 5px;
+      font-size: 0.84rem;
+      font-weight: 600;
+      cursor: pointer;
+      border: 1px solid transparent;
+      transition: background 0.15s ease, opacity 0.15s ease;
+      white-space: nowrap;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .btn-secondary {
+      background: #232832;
+      color: var(--text-main);
+      border-color: var(--border-strong);
+    }
+
+    .btn-secondary:hover:not(:disabled) {
+      background: #2e3440;
+    }
+
+    .btn-primary {
+      background: var(--accent);
+      color: #fff;
+    }
+
+    .btn-primary:hover:not(:disabled) {
+      background: var(--accent-hover);
+    }
+
+    .btn:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+
+    .toggle-label {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 0.82rem;
+      color: var(--text-muted);
+      cursor: pointer;
+      user-select: none;
+      padding: 4px 8px;
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      border-radius: 5px;
+    }
+
+    /* Badges */
+    .status-badge {
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      padding: 2px 8px;
+      border-radius: 4px;
+      background: #262b35;
+      color: var(--text-muted);
+      letter-spacing: 0.04em;
+      font-family: monospace;
+    }
+
+    .status-badge.ok {
+      background: #064e3b;
+      color: #6ee7b7;
+    }
+
+    /* Recipe Drop Zone & Cards */
+    .drop-active {
+      border-color: var(--sky) !important;
+      background: #131c26 !important;
+    }
+
+    .empty-state {
+      text-align: center;
+      padding: 32px 16px;
+      border: 1px dashed var(--border-strong);
+      border-radius: 6px;
+      color: var(--text-muted);
+      font-size: 0.88rem;
+    }
+
+    .recipe-cards-grid {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .pass-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-left: 4px solid #475569;
+      border-radius: 6px;
+      padding: 15px 16px;
+      transition: border-color 0.2s ease, background 0.2s ease;
+    }
+
+    .pass-card.running {
+      border-left-color: var(--amber);
+      background: #211f1b;
+    }
+
+    .pass-card.complete {
+      border-left-color: var(--emerald);
+      background: #15211d;
+    }
+
+    .pass-card.error {
+      border-left-color: var(--danger);
+      background: #241618;
+    }
+
+    .pass-card-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-bottom: 8px;
+    }
+
+    .pass-title {
+      font-weight: 700;
+      font-size: 0.98rem;
+      color: var(--text-bright);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .pass-card.running .status-badge { background: #78350f; color: #fde68a; }
+    .pass-card.complete .status-badge { background: #064e3b; color: #6ee7b7; }
+    .pass-card.error .status-badge { background: #7f1d1d; color: #fca5a5; }
+
+    .pass-meta {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      font-family: monospace;
+      margin-bottom: 8px;
+    }
+
+    /* Progress Bar */
+    .progress-track {
+      width: 100%;
+      height: 8px;
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      overflow: hidden;
+      margin: 8px 0 5px 0;
+    }
+
+    .progress-fill {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, var(--accent), var(--amber));
+      transition: width 0.25s ease;
+    }
+
+    .pass-card.complete .progress-fill {
+      background: var(--emerald);
+    }
+
+    .pass-card.error .progress-fill {
+      background: var(--danger);
+    }
+
+    .progress-log-line {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      font-size: 0.78rem;
+      font-family: monospace;
+      color: var(--text-muted);
+      margin-bottom: 10px;
+    }
+
+    .instruction-list {
+      list-style: none;
+      padding: 0;
+      margin: 0 0 10px 0;
+    }
+
+    .instruction-list li {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      font-size: 0.86rem;
+      margin-bottom: 5px;
+      color: #cbd5e1;
+    }
+
+    .instruction-list input[type="checkbox"] {
+      margin-top: 3px;
+      accent-color: var(--emerald);
+    }
+
+    .pass-outputs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .stem-pill {
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      padding: 2px 8px;
+      border-radius: 12px;
+      font-size: 0.74rem;
+      font-family: monospace;
+      color: var(--sky);
+    }
+
+    /* Console Log Drawer */
+    .console-box {
+      background: #090b0e;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 10px 12px;
+      height: 150px;
+      overflow-y: auto;
+      font-family: Consolas, monospace;
+      font-size: 0.78rem;
+      color: #94a3b8;
+      white-space: pre-wrap;
+    }
+
+    .log-line { margin-bottom: 3px; }
+    .log-ok { color: #6ee7b7; }
+    .log-warn { color: #fde68a; }
+    .log-err { color: #fca5a5; }
+  </style>
+</head>
+<body>
+  <div class="daw-shell">
+
+    <!-- Top Header -->
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-dot"></span>
+        <h1>HMS Stem Cleaner — Local Web DAW</h1>
+      </div>
+      <span id="bridge-status-pill" class="bridge-pill">Connecting to Python...</span>
+    </header>
+
+    <!-- 1. Workspace & API Vault -->
+    <section id="hms-api-vault" class="daw-panel">
+      <div class="panel-header">
+        <div>
+          <h2>Workspace &amp; API Vault</h2>
+          <p id="vault-status-text" class="muted-text">Waiting for Python bridge...</p>
+        </div>
+        <div class="controls-row">
+          <button id="refresh-vault-btn" class="btn btn-secondary">Refresh Status</button>
+          <button id="save-vault-btn" class="btn btn-primary">Save API Keys</button>
+        </div>
+      </div>
+
+      <div class="grid-2">
+        <div>
+          <div class="field-label">
+            <label for="mvsep-key-input">MVSEP API Key</label>
+            <span id="mvsep-badge" class="status-badge">Not Set</span>
+          </div>
+          <input type="password" id="mvsep-key-input" placeholder="Paste new MVSEP key (leave blank to keep saved)..." class="daw-input" />
+        </div>
+        <div>
+          <div class="field-label">
+            <label for="gemini-key-input">Gemini API Key (AIza...)</label>
+            <span id="gemini-badge" class="status-badge">Not Set</span>
+          </div>
+          <input type="password" id="gemini-key-input" placeholder="Paste new Gemini AI Studio key (leave blank to keep saved)..." class="daw-input" />
+        </div>
+      </div>
+    </section>
+
+    <!-- 2. Master Track & Recipe Generator -->
+    <section id="hms-track-workspace" class="daw-panel">
+      <div class="panel-header">
+        <div>
+          <h2>Master Track &amp; Recipe Generator</h2>
+          <p class="muted-text">Pick your master WAV/FLAC and output directory, then generate or load a multi-pass recipe.</p>
+        </div>
+        <div class="controls-row">
+          <select id="style-mode-select" class="daw-select">
+            <option value="Auto-Detect">Auto-Detect Style</option>
+            <option value="Heavy Metal / Industrial">Heavy Metal / Industrial</option>
+            <option value="Acoustic / Dynamic Rock">Acoustic / Dynamic Rock</option>
+          </select>
+          <button id="gemini-recipe-btn" class="btn btn-primary">Generate Recipe (Gemini)</button>
+        </div>
+      </div>
+
+      <div class="grid-2">
+        <div>
+          <div class="field-label">
+            <label for="master-wav-path">Master Audio File</label>
+          </div>
+          <div class="input-group">
+            <input type="text" id="master-wav-path" placeholder="Click Browse or type full path to WAV/FLAC..." class="daw-input" />
+            <button id="browse-wav-btn" class="btn btn-secondary">Browse</button>
+          </div>
+        </div>
+        <div>
+          <div class="field-label">
+            <label for="dest-root-path">Export Destination Root</label>
+          </div>
+          <div class="input-group">
+            <input type="text" id="dest-root-path" placeholder="Click Browse or type export root directory..." class="daw-input" />
+            <button id="browse-dest-btn" class="btn btn-secondary">Browse</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 3. Multi-Pass Recipe Pipeline Panel -->
+    <section id="hms-recipe-panel" class="daw-panel">
+      <div class="panel-header">
+        <div>
+          <h2 id="recipe-title">Multi-Pass Stem Recipe</h2>
+          <p id="recipe-overview" class="muted-text">Load or drag-and-drop a .hms_recipe.json file, or click Generate Recipe above.</p>
+        </div>
+        <div class="controls-row">
+          <label class="toggle-label" title="Simulate MVSEP outputs locally without spending API credits">
+            <input type="checkbox" id="dry-run-toggle" />
+            Dry Run (No Credits)
+          </label>
+          <label class="btn btn-secondary">
+            Load Recipe JSON
+            <input type="file" id="recipe-file-input" accept=".json" hidden />
+          </label>
+          <button id="run-all-passes-btn" class="btn btn-primary" disabled>
+            &#9654; Auto-Run All Passes
+          </button>
+        </div>
+      </div>
+
+      <div id="recipe-cards-container" class="recipe-cards-grid">
+        <div class="empty-state">
+          No recipe loaded yet. Drag a <code>.hms_recipe.json</code> file here, click <strong>Load Recipe JSON</strong>, or click <strong>Generate Recipe (Gemini)</strong>.
+        </div>
+      </div>
+    </section>
+
+    <!-- 4. Live Pipeline Activity Console -->
+    <section class="daw-panel">
+      <div class="panel-header" style="margin-bottom: 10px; padding-bottom: 8px;">
+        <div>
+          <h2>Pipeline Activity Log</h2>
+        </div>
+        <button id="clear-log-btn" class="btn btn-secondary">Clear Log</button>
+      </div>
+      <div id="activity-console" class="console-box"></div>
+    </section>
+
+  </div>
+
+  <script>
+    let currentRecipe = null;
+    let bridgeInitialized = false;
+
+    // --- Utilities ---
+    function escapeHtml(str) {
+      return String(str ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
+    function appendLog(message, level = 'info') {
+      const box = document.getElementById('activity-console');
+      const now = new Date().toLocaleTimeString();
+      const line = document.createElement('div');
+      line.className = 'log-line ' + (level === 'ok' ? 'log-ok' : level === 'err' ? 'log-err' : level === 'warn' ? 'log-warn' : '');
+      line.textContent = `[${now}] ${message}`;
+      box.appendChild(line);
+      box.scrollTop = box.scrollHeight;
+    }
+
+    function hasPythonBridge() {
+      return Boolean(window.pywebview && window.pywebview.api);
+    }
+
+    // --- Global Progress Receiver (Called Directly by Python window.run_js) ---
+    window.hmsUpdateProgress = function ({ pass_id, percent, message, status }) {
+      const card = document.getElementById(`pass-card-${pass_id}`);
+      const badge = document.getElementById(`badge-${pass_id}`);
+      const fill = document.getElementById(`progress-fill-${pass_id}`);
+      const msgEl = document.getElementById(`progress-msg-${pass_id}`);
+      const pctEl = document.getElementById(`progress-pct-${pass_id}`);
+
+      const safePct = Math.max(0, Math.min(100, Number(percent) || 0));
+      appendLog(`Pass ${pass_id} [${String(status || 'running').toUpperCase()}] (${safePct}%): ${message}`, status === 'error' ? 'err' : status === 'complete' ? 'ok' : 'info');
+
+      if (!card) return;
+
+      fill.style.width = `${safePct}%`;
+      pctEl.textContent = `${safePct}%`;
+      msgEl.textContent = message;
+
+      card.classList.remove('running', 'complete', 'error');
+      if (status === 'running') {
+        card.classList.add('running');
+        badge.textContent = `Running (${safePct}%)`;
+      } else if (status === 'complete') {
+        card.classList.add('complete');
+        badge.textContent = 'Complete';
+        card.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
+          cb.checked = true;
+        });
+      } else if (status === 'error') {
+        card.classList.add('error');
+        badge.textContent = 'Error';
+      }
+    };
+
+    // --- API Vault Sync ---
+    async function refreshVaultStatus() {
+      const pill = document.getElementById('bridge-status-pill');
+      const statusEl = document.getElementById('vault-status-text');
+      const mvsepBadge = document.getElementById('mvsep-badge');
+      const geminiBadge = document.getElementById('gemini-badge');
+
+      if (!hasPythonBridge()) {
+        pill.textContent = 'Offline Preview (No Python Bridge)';
+        pill.className = 'bridge-pill offline';
+        statusEl.textContent = 'Launch via python hms_web_daw_launcher.py to connect the persistent API vault.';
+        return;
+      }
+
+      pill.textContent = 'Python Bridge Connected';
+      pill.className = 'bridge-pill connected';
+
+      try {
+        const res = await window.pywebview.api.get_keys_status();
+        if (res.status !== 'ok') {
+          statusEl.textContent = `Vault error: ${res.error}`;
+          appendLog(`Vault error: ${res.error}`, 'err');
+          return;
+        }
+
+        statusEl.textContent = `Vault active: ${res.vault_path}`;
+        mvsepBadge.textContent = res.has_mvsep ? `Saved (${res.keys.mvsep_api_key})` : 'Not Set';
+        mvsepBadge.className = 'status-badge' + (res.has_mvsep ? ' ok' : '');
+
+        geminiBadge.textContent = res.has_gemini ? `Saved (${res.keys.gemini_api_key})` : 'Not Set';
+        geminiBadge.className = 'status-badge' + (res.has_gemini ? ' ok' : '');
+
+        appendLog(`API Vault synced (MVSEP=${res.has_mvsep}, Gemini=${res.has_gemini}).`, 'ok');
+      } catch (err) {
+        statusEl.textContent = `Bridge call failed: ${err.message || err}`;
+        appendLog(`refreshVaultStatus failed: ${err}`, 'err');
+      }
+    }
+
+    function initBridgeOnce() {
+      if (bridgeInitialized) return;
+      if (hasPythonBridge()) {
+        bridgeInitialized = true;
+        refreshVaultStatus();
+      }
+    }
+
+    window.addEventListener('pywebviewready', initBridgeOnce);
+    window.addEventListener('DOMContentLoaded', () => {
+      initBridgeOnce();
+      // Give pywebview 1.2s to inject window.pywebview before showing Offline Preview status
+      setTimeout(() => {
+        if (!bridgeInitialized) refreshVaultStatus();
+      }, 1200);
+    });
+
+    // --- Vault Button Handlers ---
+    document.getElementById('refresh-vault-btn').addEventListener('click', refreshVaultStatus);
+
+    document.getElementById('save-vault-btn').addEventListener('click', async () => {
+      if (!hasPythonBridge()) {
+        alert('Python bridge not connected. Launch via python hms_web_daw_launcher.py.');
+        return;
+      }
+
+      const mvsepInput = document.getElementById('mvsep-key-input');
+      const geminiInput = document.getElementById('gemini-key-input');
+
+      if (!mvsepInput.value.trim() && !geminiInput.value.trim()) {
+        appendLog('Nothing to save: enter at least one new API key.', 'warn');
+        return;
+      }
+
+      try {
+        const res = await window.pywebview.api.save_keys({
+          mvsep_api_key: mvsepInput.value,
+          gemini_api_key: geminiInput.value,
+        });
+
+        if (res.status === 'ok') {
+          mvsepInput.value = '';
+          geminiInput.value = '';
+          appendLog(`Saved keys (${(res.saved_fields || []).join(', ')}) to ${res.vault_path}`, 'ok');
+          await refreshVaultStatus();
+        } else {
+          appendLog(`Failed to save keys: ${res.error}`, 'err');
+          alert('Failed to save keys: ' + res.error);
+        }
+      } catch (err) {
+        appendLog(`Save keys exception: ${err}`, 'err');
+      }
+    });
+
+    // --- Native Explorer File/Folder Pickers ---
+    document.getElementById('browse-wav-btn').addEventListener('click', async () => {
+      if (!hasPythonBridge()) {
+        alert('Native Explorer picker requires launching through hms_web_daw_launcher.py.');
+        return;
+      }
+      const res = await window.pywebview.api.browse_master_audio();
+      if (res.status === 'ok' && res.path) {
+        document.getElementById('master-wav-path').value = res.path;
+        appendLog(`Master track selected: ${res.path}`, 'ok');
+      }
+    });
+
+    document.getElementById('browse-dest-btn').addEventListener('click', async () => {
+      if (!hasPythonBridge()) {
+        alert('Native Explorer picker requires launching through hms_web_daw_launcher.py.');
+        return;
+      }
+      const res = await window.pywebview.api.browse_output_folder();
+      if (res.status === 'ok' && res.path) {
+        document.getElementById('dest-root-path').value = res.path;
+        appendLog(`Export destination selected: ${res.path}`, 'ok');
+      }
+    });
+
+    // --- Gemini Recipe Generation ---
+    document.getElementById('gemini-recipe-btn').addEventListener('click', async () => {
+      if (!hasPythonBridge()) {
+        alert('Recipe generator requires launching through hms_web_daw_launcher.py.');
+        return;
+      }
+      const wavPath = document.getElementById('master-wav-path').value.trim();
+      const styleHint = document.getElementById('style-mode-select').value;
+      if (!wavPath) {
+        alert('Select a Master Audio File first.');
+        return;
+      }
+
+      const btn = document.getElementById('gemini-recipe-btn');
+      btn.disabled = true;
+      btn.textContent = 'Generating...';
+      appendLog(`Requesting recipe (${styleHint}) for ${wavPath}...`);
+
+      try {
+        const res = await window.pywebview.api.generate_recipe(wavPath, styleHint);
+        if (res.status === 'ok' && res.recipe) {
+          loadRecipeIntoUI(res.recipe);
+          const sourceTag = String(res.source || 'local').toUpperCase();
+          document.getElementById('recipe-overview').textContent =
+            `[${sourceTag}] ${res.recipe.end_user_overview || ''}`;
+          appendLog(`Recipe ready [${sourceTag}]${res.saved_path ? ' -> ' + res.saved_path : ''}`, 'ok');
+        } else {
+          appendLog(`Recipe generation failed: ${res.error || 'Unknown error'}`, 'err');
+        }
+      } catch (err) {
+        appendLog(`Recipe generation exception: ${err}`, 'err');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Generate Recipe (Gemini)';
+      }
+    });
+
+    // --- Recipe File Picker & Drag-and-Drop ---
+    function parseRecipeFile(file) {
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        try {
+          const recipeData = JSON.parse(e.target.result);
+          if (!Array.isArray(recipeData.passes) || recipeData.passes.length === 0) {
+            throw new Error('JSON is missing a non-empty "passes" array.');
+          }
+          loadRecipeIntoUI(recipeData);
+          appendLog(`Loaded recipe file: ${file.name} (${recipeData.passes.length} passes).`, 'ok');
+        } catch (err) {
+          appendLog(`Invalid JSON recipe file: ${err.message}`, 'err');
+          alert('Invalid JSON recipe file: ' + err.message);
+        }
+      };
+      reader.readAsText(file);
+    }
+
+    document.getElementById('recipe-file-input').addEventListener('change', (e) => {
+      parseRecipeFile(e.target.files[0]);
+      e.target.value = '';
+    });
+
+    const recipePanel = document.getElementById('hms-recipe-panel');
+    recipePanel.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      recipePanel.classList.add('drop-active');
+    });
+    recipePanel.addEventListener('dragleave', () => recipePanel.classList.remove('drop-active'));
+    recipePanel.addEventListener('drop', (e) => {
+      e.preventDefault();
+      recipePanel.classList.remove('drop-active');
+      if (e.dataTransfer.files.length > 0) {
+        parseRecipeFile(e.dataTransfer.files[0]);
+      }
+    });
+
+    // --- Render Recipe Step Cards ---
+    function loadRecipeIntoUI(recipe) {
+      currentRecipe = recipe;
+      document.getElementById('recipe-title').textContent = recipe.recipe_name || 'Untitled Recipe';
+      document.getElementById('recipe-overview').textContent = recipe.end_user_overview || '';
+      document.getElementById('run-all-passes-btn').disabled = false;
+
+      const container = document.getElementById('recipe-cards-container');
+      container.innerHTML = '';
+
+      recipe.passes.forEach((pass) => {
+        const passId = Number(pass.pass_id);
+        const modelLabel = pass.mvsep_config
+          ? `${pass.mvsep_config.model_type || 'MVSEP'}${pass.mvsep_config.opt_params ? ' (' + pass.mvsep_config.opt_params + ')' : ''}`
+          : 'HMS Headless DSP & Bus Router';
+
+        const instructionsHTML = (pass.user_instructions || [])
+          .map(
+            (text, idx) => `
+            <li>
+              <input type="checkbox" id="chk-${passId}-${idx}" />
+              <label for="chk-${passId}-${idx}">${escapeHtml(text)}</label>
+            </li>`
+          )
+          .join('');
+
+        const outputItems = pass.expected_outputs || Object.keys(pass.bus_routing || {});
+        const outputsHTML = outputItems
+          .map((stem) => `<span class="stem-pill">${escapeHtml(stem)}</span>`)
+          .join('');
+
+        const card = document.createElement('div');
+        card.className = 'pass-card';
+        card.id = `pass-card-${passId}`;
+        card.innerHTML = `
+          <div class="pass-card-top">
+            <div class="pass-title">
+              <span>Pass ${passId}: ${escapeHtml(pass.stage_name || 'Unnamed Stage')}</span>
+              <span class="status-badge" id="badge-${passId}">Pending</span>
+            </div>
+            <button class="btn btn-secondary" onclick="executeSinglePass(${passId})">
+              &#9654; Run Pass ${passId}
+            </button>
+          </div>
+          <div class="pass-meta">
+            Input: <strong>${escapeHtml(pass.input_source || 'MASTER_MIX')}</strong>
+            &nbsp;|&nbsp;
+            Engine: <strong>${escapeHtml(modelLabel)}</strong>
+          </div>
+          <div class="progress-track">
+            <div class="progress-fill" id="progress-fill-${passId}"></div>
+          </div>
+          <div class="progress-log-line">
+            <span id="progress-msg-${passId}">Idle</span>
+            <span id="progress-pct-${passId}">0%</span>
+          </div>
+          <ul class="instruction-list">${instructionsHTML}</ul>
+          <div class="pass-outputs">${outputsHTML}</div>
+        `;
+        container.appendChild(card);
+      });
+    }
+
+    // --- Execution Triggers ---
+    async function executeSinglePass(passId) {
+      if (!currentRecipe) return;
+      const passObj = currentRecipe.passes.find((p) => Number(p.pass_id) === Number(passId));
+      const wavPath = document.getElementById('master-wav-path').value.trim();
+      const destPath = document.getElementById('dest-root-path').value.trim();
+      const isDryRun = document.getElementById('dry-run-toggle').checked;
+
+      if (!passObj || !wavPath || !destPath) {
+        alert('Select both a Master Audio File and an Export Destination Root first.');
+        return;
+      }
+      if (!hasPythonBridge()) {
+        alert('Python bridge not connected.');
+        return;
+      }
+
+      if (typeof window.pywebview.api.run_single_pass !== 'function') {
+        appendLog('run_single_pass() is not exposed in hms_web_daw_launcher.py yet; use Auto-Run All Passes or add run_single_pass to WebDawApi.', 'warn');
+        return;
+      }
+
+      window.hmsUpdateProgress({
+        pass_id: passId,
+        percent: 2,
+        message: isDryRun ? 'Starting single-pass dry run...' : 'Dispatching pass to Python worker...',
+        status: 'running',
+      });
+
+      const res = await window.pywebview.api.run_single_pass(passObj, wavPath, destPath, isDryRun);
+      if (res && res.status === 'error') {
+        window.hmsUpdateProgress({ pass_id: passId, percent: 0, message: res.error, status: 'error' });
+      }
+    }
+
+    document.getElementById('run-all-passes-btn').addEventListener('click', async () => {
+      const wavPath = document.getElementById('master-wav-path').value.trim();
+      const destPath = document.getElementById('dest-root-path').value.trim();
+      const isDryRun = document.getElementById('dry-run-toggle').checked;
+
+      if (!currentRecipe || !wavPath || !destPath) {
+        alert('Load/generate a recipe and select both Master Audio File and Export Destination Root.');
+        return;
+      }
+      if (!hasPythonBridge()) {
+        alert('Python bridge not connected. Launch via python hms_web_daw_launcher.py.');
+        return;
+      }
+
+      // Reset all cards to pending before starting a full chain
+      currentRecipe.passes.forEach((p) => {
+        const card = document.getElementById(`pass-card-${p.pass_id}`);
+        if (card) {
+          card.classList.remove('running', 'complete', 'error');
+          document.getElementById(`badge-${p.pass_id}`).textContent = 'Queued';
+          document.getElementById(`progress-fill-${p.pass_id}`).style.width = '0%';
+          document.getElementById(`progress-pct-${p.pass_id}`).textContent = '0%';
+          document.getElementById(`progress-msg-${p.pass_id}`).textContent = 'Waiting in queue...';
+        }
+      });
+
+      appendLog(`Starting ${isDryRun ? 'DRY RUN ' : ''}sequential pipeline (${currentRecipe.passes.length} passes)...`, 'ok');
+      await window.pywebview.api.run_all_passes(currentRecipe, wavPath, destPath, isDryRun);
+    });
+
+    document.getElementById('clear-log-btn').addEventListener('click', () => {
+      document.getElementById('activity-console').innerHTML = '';
+    });
+  </script>
+</body>
+</html>

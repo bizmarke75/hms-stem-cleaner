@@ -9,7 +9,12 @@ from pathlib import Path
 import requests
 
 CONFIG_FILE_PATH = Path.home() / ".mvsep_hms_config.json"
-HMS_REPO_DIR = r"C:\github\projects\hms-stem-cleaner"
+# HMS_BRIDGE_FROZEN_SAFE
+HMS_REPO_DIR = (
+    getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(sys.executable)))
+    if getattr(sys, "frozen", False)
+    else os.path.dirname(os.path.abspath(__file__))
+)
 
 GEMINI_MODEL_CANDIDATES = [
     "gemini-4-hydrogen",
@@ -364,6 +369,56 @@ def _patch_rest_server_for_full_web_daw():
 
 
 _patch_rest_server_for_full_web_daw()
+
+
+
+
+# === HMS_MVSEP_MULTIPASS_REST_PATCH ===
+def _attach_multipass_routes_to_hms_rest():
+    if "_HMSRequestHandler" not in globals():
+        return
+
+    _prev_get = _HMSRequestHandler.do_GET
+    _prev_post = _HMSRequestHandler.do_POST
+
+    def _mp_do_get(self):
+        if self.path.startswith("/api/mvsep/multipass/status"):
+            b = _get_shared_web_daw_bridge()
+            self._send_json(200, b.get_mvsep_multipass_status())
+            return
+        if self.path.startswith("/api/mvsep/multipass/recipe"):
+            b = _get_shared_web_daw_bridge()
+            self._send_json(200, b.get_mvsep_multipass_recipe())
+            return
+        return _prev_get(self)
+
+    def _mp_do_post(self):
+        # Only consume self.rfile for our multipass routes so other handlers stay intact
+        if self.path.startswith("/api/mvsep/multipass/"):
+            try:
+                content_len = int(self.headers.get("Content-Length", 0))
+                raw = self.rfile.read(content_len).decode("utf-8") if content_len else "{}"
+                req = json.loads(raw) if raw else {}
+            except Exception:
+                req = {}
+
+            b = _get_shared_web_daw_bridge()
+            if self.path.startswith("/api/mvsep/multipass/start"):
+                self._send_json(200, b.start_mvsep_multipass(req))
+                return
+            if self.path.startswith("/api/mvsep/multipass/cancel"):
+                self._send_json(200, b.cancel_mvsep_multipass())
+                return
+            self._send_json(404, {"status": "error", "message": f"Unknown multipass route: {self.path}"})
+            return
+
+        return _prev_post(self)
+
+    _HMSRequestHandler.do_GET = _mp_do_get
+    _HMSRequestHandler.do_POST = _mp_do_post
+
+
+_attach_multipass_routes_to_hms_rest()
 
 
 if __name__ == "__main__":

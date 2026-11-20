@@ -174,3 +174,17 @@ This utility automates the sorting, de-echoing, VST3 DSP cleanup, bus gluing, an
 ## 8. v1.3 Web-DAW Frontend & PyWebView Bridge Update (2026-11-17)
 - Added hms_web_daw.html (60 FPS FFT spectrum analyzer, WAV audition deck, 9-slider hardware rack, JSON preset manager).
 - Added hms_web_daw_launcher.py (native Windows Edge WebView2 desktop bridge + auto-starting 127.0.0.1:8765 REST server).
+
+---
+
+## 9. v1.4.0 Non-Portable Windows Installer, Real-Time Stereo PCM Waveform & MVSep Free-Tier Multi-Pass (2026-11-20 14:50)
+- **Non-Portable Windows Installer Pipeline (`hms_runtime_paths.py`, `fix_v1_4_html_and_rebuild.py`, `build_v1_4_windows_installer.py`):**
+  - Decoupled read-only installation assets (`sys._MEIPASS` / install dir) from writable Windows user data (`%LOCALAPPDATA%\HMS Studio Suite\` for `_HMS_Rollback_Vault`, `logs`, `presets`, and `WebView2Cache` via `WEBVIEW2_USER_DATA_FOLDER`).
+  - Switched compiled distribution from `--onefile` to PyInstaller `--onedir` (`dist\HMS_Studio_Suite\HMS_Studio_Suite.exe`) wrapped in Inno Setup 6 (`PrivilegesRequired=admin`, `DisableDirPage=no`, fixed AppId GUID `{A4A9CA40-FF08-4C93-BD3F-0FDF3188C53F}`).
+- **Real-Time Stereo PCM Waveform & Oscilloscope Engine (v1.4.3):**
+  - Added early `<head>` `AudioNode.prototype.connect` stereo `ChannelSplitter` tap clocked via a zero-gain sink plus a Pure-JS 8/16/24/32-bit PCM & `WAVE_FORMAT_EXTENSIBLE (0xFFFE)` WAV parser.
+  - Renders live 60 FPS L/R oscilloscope + FFT spectrum across both the main deck and legacy left-side canvases/meters alongside a split L/R full-track click-to-seek overview and 440 Hz Test Tone.
+- **MVSep Registered Free-Tier Safe Mode & Sequential Multi-Pass Runner (`hms_mvsep_multipass.py`):**
+  - Enforces Registered Free Tier guardrails (blocks Premium Ensemble `sep_type` `{26, 28, 30}`, blocks 24/32-bit `output_format` `{4, 5}`, enforces 100 MB cap with lossless FLAC pre-compression, and locks concurrency to max 1 active job).
+  - Stages winning stems per pass into `<Song_Name>_Stems\` and isolates duplicate stems into sibling `<Song_Name>_Stems_Unused_Passes\`.
+  - Wired into `hms_web_daw_launcher.py` (using AST/runtime bridge auto-discovery + `HMSWebDawBridge` alias), `hms_ai_api_bridge.py`, and `launch_chrome_web_daw.py`.

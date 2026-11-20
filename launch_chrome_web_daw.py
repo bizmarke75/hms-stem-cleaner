@@ -598,5 +598,122 @@ def _attach_wav_streamer_to_chrome_handler():
 _attach_wav_streamer_to_chrome_handler()
 
 
+
+
+# === CHROME_DAW_VERIFY_KEYS_ENDPOINT_V1 ===
+import requests as _req_verify
+
+def _verify_saved_api_keys_live(req_dict=None):
+    req_dict = req_dict or {}
+    st = _BRIDGE.get_status()
+    mv_key = (req_dict.get("mvsep_api_token") or st.get("mvsep_api_token") or "").strip()
+    gm_key = (req_dict.get("gemini_api_key") or st.get("gemini_api_key") or "").strip()
+
+    mv_masked = (mv_key[:5] + "..." + mv_key[-4:]) if len(mv_key) > 10 else ("SET" if mv_key else "MISSING")
+    gm_masked = (gm_key[:6] + "..." + gm_key[-4:]) if len(gm_key) > 10 else ("SET" if gm_key else "MISSING")
+
+    # Test Gemini Key live against Google AI Studio active models
+    gm_ok = False
+    gm_model = "none"
+    gm_msg = "No Gemini key configured"
+    if gm_key:
+        candidates = ["gemini-4-hydrogen", "gemini-3.8-flash", "gemini-3.5-flash-lite", "gemini-2.5-flash-lite"]
+        headers = {"x-goog-api-key": gm_key, "Content-Type": "application/json"}
+        payload = {"contents": [{"parts": [{"text": "Reply with OK"}]}]}
+        for m in candidates:
+            try:
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent"
+                r = _req_verify.post(url, headers=headers, json=payload, timeout=10)
+                if r.status_code == 200:
+                    gm_ok = True
+                    gm_model = m
+                    gm_msg = f"Connected ({m})"
+                    break
+                else:
+                    gm_msg = f"HTTP {r.status_code} on {m}"
+            except Exception as ex:
+                gm_msg = str(ex)
+
+    return {
+        "status": "ok",
+        "mvsep_present": bool(mv_key),
+        "mvsep_masked": mv_masked,
+        "mvsep_length": len(mv_key),
+        "gemini_present": bool(gm_key),
+        "gemini_masked": gm_masked,
+        "gemini_live_ok": gm_ok,
+        "gemini_model": gm_model,
+        "gemini_message": gm_msg,
+    }
+
+
+def _attach_verify_keys_handler():
+    orig_do_post = ChromeDAWRequestHandler.do_POST
+
+    def _verify_do_post(self):
+        clean_path = self.path.split("?")[0]
+        if clean_path == "/api/verify_keys":
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                body_str = self.rfile.read(length).decode("utf-8") if length else "{}"
+                req = json.loads(body_str) if body_str else {}
+            except Exception:
+                req = {}
+            self._send_json(200, _verify_saved_api_keys_live(req))
+            return
+        return orig_do_post(self)
+
+    ChromeDAWRequestHandler.do_POST = _verify_do_post
+
+
+_attach_verify_keys_handler()
+
+
+
+
+# === HMS_CHROME_MULTIPASS_ROUTES_PATCH ===
+def _attach_multipass_routes_to_chrome_server():
+    if "ChromeDAWRequestHandler" not in globals():
+        return
+
+    _prev_get = ChromeDAWRequestHandler.do_GET
+    _prev_post = ChromeDAWRequestHandler.do_POST
+
+    def _chrome_mp_get(self):
+        if self.path.startswith("/api/mvsep/multipass/status"):
+            self._send_json(200, _BRIDGE.get_mvsep_multipass_status())
+            return
+        if self.path.startswith("/api/mvsep/multipass/recipe"):
+            self._send_json(200, _BRIDGE.get_mvsep_multipass_recipe())
+            return
+        return _prev_get(self)
+
+    def _chrome_mp_post(self):
+        if self.path.startswith("/api/mvsep/multipass/"):
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                body = self.rfile.read(length).decode("utf-8") if length else "{}"
+                req = json.loads(body) if body else {}
+            except Exception:
+                req = {}
+
+            if self.path.startswith("/api/mvsep/multipass/start"):
+                self._send_json(200, _BRIDGE.start_mvsep_multipass(req))
+                return
+            if self.path.startswith("/api/mvsep/multipass/cancel"):
+                self._send_json(200, _BRIDGE.cancel_mvsep_multipass())
+                return
+            self._send_json(404, {"status": "error", "message": f"Unknown multipass route: {self.path}"})
+            return
+
+        return _prev_post(self)
+
+    ChromeDAWRequestHandler.do_GET = _chrome_mp_get
+    ChromeDAWRequestHandler.do_POST = _chrome_mp_post
+
+
+_attach_multipass_routes_to_chrome_server()
+
+
 if __name__ == "__main__":
     main()

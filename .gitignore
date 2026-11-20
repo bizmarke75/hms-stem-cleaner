@@ -23,3 +23,6 @@ _layer2b_raw_in/
 _layer2b_clean_out/
 
 *.tmp
+installer_out/
+*.exe
+*.zip

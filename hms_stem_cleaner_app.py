@@ -131,6 +131,23 @@ def write_wav_atomic(target_wav_path, audio_buffer, samplerate, bit_depth=24):
 # ==============================================================================
 # LAYER 1C: PRE-FLIGHT SAFETY CHECKPOINT & ROLLBACK VAULT
 # ==============================================================================
+
+# ==============================================================================
+# NON-PORTABLE INSTALLER PATH GUARD (%LOCALAPPDATA% WRITABLE VAULT)
+# ==============================================================================
+try:
+    from hms_runtime_paths import resolve_hms_runtime_paths as _hms_resolve_paths
+    _HMS_RUNTIME_INFO = _hms_resolve_paths() or {}
+    HMS_NON_PORTABLE_VAULT_ROOT = _HMS_RUNTIME_INFO.get(
+        "rollback_vault_dir",
+        os.path.join(os.environ.get("LOCALAPPDATA", os.path.expanduser("~")), "HMS Studio Suite", "_HMS_Rollback_Vault"),
+    )
+except Exception:
+    HMS_NON_PORTABLE_VAULT_ROOT = os.path.join(
+        os.environ.get("LOCALAPPDATA", os.path.expanduser("~")), "HMS Studio Suite", "_HMS_Rollback_Vault"
+    )
+
+
 def create_song_checkpoint(song_dir, vault_root=None):
     """
     Creates a timestamped backup snapshot of all raw .wav stems in song_dir

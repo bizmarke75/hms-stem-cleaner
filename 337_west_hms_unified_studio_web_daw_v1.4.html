@@ -1,0 +1,3374 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+<!-- HMS_AUDIO_TAP_V1_4_3 -->
+<script>
+(function () {
+  "use strict";
+  if (window.__HMS_AUDIO_TAP_INSTALLED__) return;
+  window.__HMS_AUDIO_TAP_INSTALLED__ = true;
+
+  const tap = {
+    ctx: null,
+    splitter: null,
+    analyserL: null,
+    analyserR: null,
+    zeroGain: null,
+    lastDecodedBuffer: null,
+    tappedNodes: new WeakSet(),
+  };
+  window.__HMS_TAP__ = tap;
+
+  // Tap ANY Web Audio node connecting to ctx.destination (test synth, AudioBufferSource, MediaElementSource)
+  if (typeof AudioNode !== "undefined" && AudioNode.prototype && AudioNode.prototype.connect) {
+    const origConnect = AudioNode.prototype.connect;
+    AudioNode.prototype.connect = function (dest) {
+      const result = origConnect.apply(this, arguments);
+      try {
+        if (dest && this.context && dest === this.context.destination && !tap.tappedNodes.has(this)) {
+          tap.tappedNodes.add(this);
+          if (!tap.analyserL || tap.ctx !== this.context) {
+            tap.ctx = this.context;
+            tap.splitter = this.context.createChannelSplitter(2);
+            tap.analyserL = this.context.createAnalyser();
+            tap.analyserR = this.context.createAnalyser();
+            tap.analyserL.fftSize = 2048;
+            tap.analyserR.fftSize = 2048;
+            tap.analyserL.smoothingTimeConstant = 0.72;
+            tap.analyserR.smoothingTimeConstant = 0.72;
+
+            // Silent zero-gain sink guarantees Chromium/WebView2 ALWAYS clocks both Analysers
+            tap.zeroGain = this.context.createGain();
+            tap.zeroGain.gain.value = 0.0;
+            tap.tappedNodes.add(tap.zeroGain);
+
+            origConnect.call(tap.splitter, tap.analyserL, 0);
+            origConnect.call(tap.splitter, tap.analyserR, 1);
+            origConnect.call(tap.analyserL, tap.zeroGain);
+            origConnect.call(tap.analyserR, tap.zeroGain);
+            origConnect.call(tap.zeroGain, this.context.destination);
+          }
+          origConnect.call(this, tap.splitter);
+        }
+      } catch (e) {}
+      return result;
+    };
+  }
+
+  // Intercept decodeAudioData so any track decoded by native page code populates the waveform graph immediately
+  const BaseCtx = window.BaseAudioContext || window.AudioContext || window.webkitAudioContext;
+  if (BaseCtx && BaseCtx.prototype && BaseCtx.prototype.decodeAudioData) {
+    const origDecode = BaseCtx.prototype.decodeAudioData;
+    BaseCtx.prototype.decodeAudioData = function (buf, onOk, onErr) {
+      const broadcast = (decoded) => {
+        if (decoded) {
+          tap.lastDecodedBuffer = decoded;
+          window.dispatchEvent(new CustomEvent("hms-pcm-decoded", { detail: { buffer: decoded } }));
+        }
+      };
+      const wrappedOk = typeof onOk === "function" ? (d) => { broadcast(d); onOk(d); } : undefined;
+      const ret = origDecode.call(this, buf, wrappedOk, onErr);
+      if (ret && typeof ret.then === "function") {
+        return ret.then((d) => { broadcast(d); return d; });
+      }
+      return ret;
+    };
+  }
+})();
+</script>
+<!-- /HMS_AUDIO_TAP_V1_4_3 -->
+
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>337 WEST // HMS UNIFIED STUDIO SUITE (v1.4 Web-DAW)</title>
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Google Fonts: JetBrains Mono & Inter -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <!-- FontAwesome Icons -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" />
+
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Inter', 'sans-serif'],
+            mono: ['JetBrains Mono', 'monospace'],
+          },
+          colors: {
+            studio: {
+              bg: '#090b10',
+              panel: '#11151f',
+              card: '#161b28',
+              border: '#232b3e',
+              vox: '#00ff88',
+              rhy: '#ff5555',
+              mus: '#61afef',
+              gate: '#f39c12',
+              vst: '#ff88aa',
+              warm: '#fab387',
+              ceil: '#a6e3a1',
+              cyber: '#c678dd'
+            }
+          }
+        }
+      }
+    }
+  </script>
+
+  <style>
+    /* Custom Studio Scrollbars & Range Sliders */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #090b10; }
+    ::-webkit-scrollbar-thumb { background: #263044; border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #00ff88; }
+
+    body {
+      background-color: #090b10;
+      background-image:
+        radial-gradient(circle at 15% 15%, rgba(0, 255, 136, 0.04) 0%, transparent 35%),
+        radial-gradient(circle at 85% 20%, rgba(198, 120, 221, 0.05) 0%, transparent 40%),
+        linear-gradient(to bottom, #090b10, #0c0f17);
+      color: #e2e8f0;
+      user-select: none;
+    }
+
+    /* Hardware Fader Styling */
+    .fader-input {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 100%;
+      height: 10px;
+      background: #090b10;
+      border: 1px solid #263044;
+      border-radius: 999px;
+      outline: none;
+      cursor: pointer;
+      box-shadow: inset 0 2px 5px rgba(0,0,0,0.85);
+    }
+    .fader-input::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 24px;
+      height: 16px;
+      border-radius: 4px;
+      background: linear-gradient(180deg, #475569 0%, #1e293b 50%, #0f172a 100%);
+      border: 1px solid #94a3b8;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.9), 0 0 8px var(--thumb-glow, rgba(0,255,136,0.5));
+      cursor: grab;
+      transition: transform 0.1s ease, box-shadow 0.15s ease;
+    }
+    .fader-input::-webkit-slider-thumb:active {
+      cursor: grabbing;
+      transform: scale(1.08);
+    }
+
+    /* Hardware Brushed Metal Panel Effect */
+    .rack-panel {
+      background: linear-gradient(180deg, rgba(22, 27, 40, 0.92) 0%, rgba(14, 18, 27, 0.96) 100%);
+      border: 1px solid rgba(51, 65, 85, 0.55);
+      box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.8), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+    }
+
+    /* Screw Head Details */
+    .rack-screw {
+      width: 8px;
+      height: 8px;
+      border-radius: 9999px;
+      background: radial-gradient(circle, #334155 20%, #0f172a 90%);
+      border: 1px solid #475569;
+      position: relative;
+    }
+    .rack-screw::after {
+      content: '';
+      position: absolute;
+      top: 3px;
+      left: 1px;
+      width: 4px;
+      height: 1px;
+      background: #090b10;
+      transform: rotate(35deg);
+    }
+
+    /* Tactile Studio Button */
+    .studio-btn {
+      transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+      position: relative;
+      overflow: hidden;
+    }
+    .studio-btn:active:not(:disabled) {
+      transform: translateY(1px) scale(0.99);
+    }
+    .studio-btn:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+
+    /* Rotary Knob Cursor */
+    .rotary-knob-zone {
+      cursor: ns-resize;
+      touch-action: none;
+    }
+
+    /* Multi-Pass Recipe Card States */
+    .recipe-drop-active {
+      border-color: #38bdf8 !important;
+      box-shadow: 0 0 20px rgba(56, 189, 248, 0.25) !important;
+    }
+    .pass-card {
+      background: #0a0d14;
+      border: 1px solid #1e293b;
+      border-left: 4px solid #475569;
+      border-radius: 0.5rem;
+      padding: 0.85rem 1rem;
+      transition: border-color 0.2s ease, background 0.2s ease;
+    }
+    .pass-card.running {
+      border-left-color: #f59e0b;
+      background: rgba(245, 158, 11, 0.06);
+    }
+    .pass-card.complete {
+      border-left-color: #00ff88;
+      background: rgba(0, 255, 136, 0.05);
+    }
+    .pass-card.error {
+      border-left-color: #ff5555;
+      background: rgba(255, 85, 85, 0.07);
+    }
+  </style>
+</head>
+<body class="min-h-screen flex flex-col font-sans text-xs antialiased selection:bg-emerald-500 selection:text-black">
+
+  <!-- ========================================================================= -->
+  <!-- 1. TOP GLOBAL STUDIO HEADER & REAL PERSISTENT API VAULT BAR               -->
+  <!-- ========================================================================= -->
+  <header class="sticky top-0 z-40 rack-panel border-b border-slate-800/90 px-4 py-2.5 backdrop-blur-md">
+    <div class="max-w-[1640px] mx-auto flex flex-wrap items-center justify-between gap-3">
+
+      <!-- Brand Identity -->
+      <div class="flex items-center gap-3">
+        <div class="w-9 h-9 rounded-lg bg-gradient-to-br from-emerald-500/20 via-purple-500/20 to-sky-500/20 border border-emerald-400/50 flex items-center justify-center shadow-[0_0_15px_rgba(0,255,136,0.2)]">
+          <i class="fa-solid fa-wave-square text-emerald-400 text-base"></i>
+        </div>
+        <div>
+          <div class="flex items-center gap-2">
+            <h1 class="font-mono font-bold text-sm md:text-base tracking-wider text-white">
+              337 WEST <span class="text-emerald-400">//</span> HMS UNIFIED STUDIO SUITE
+            </h1>
+            <span class="px-2 py-0.5 text-[10px] font-mono font-semibold rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
+              v1.4 LIVE WEB-DAW
+            </span>
+          </div>
+          <p class="text-[11px] text-slate-400 font-mono">
+            64-Bit Pedalboard VST3 Rack • FLAC-Streamed MVSep • Multi-Pass Recipe Chainer • Persistent Vault • Gemini 2.5
+          </p>
+        </div>
+      </div>
+
+      <!-- Mode Switcher Tabs -->
+      <nav class="flex items-center bg-[#090b10] p-1 rounded-lg border border-slate-800 gap-1">
+        <button onclick="switchMainTab('console')" id="tab-btn-console" class="studio-btn px-3 py-1.5 rounded-md font-mono font-semibold text-xs bg-emerald-500/15 text-emerald-300 border border-emerald-500/40 shadow-[0_0_12px_rgba(0,255,136,0.15)]">
+          <i class="fa-solid fa-sliders mr-1.5"></i>9-SLIDER VST3 CONSOLE
+        </button>
+        <button onclick="switchMainTab('mvsep')" id="tab-btn-mvsep" class="studio-btn px-3 py-1.5 rounded-md font-mono font-semibold text-xs text-slate-400 hover:text-white border border-transparent">
+          <i class="fa-solid fa-cloud-arrow-up mr-1.5 text-sky-400"></i>MVSEP &amp; MULTI-PASS RECIPES
+        </button>
+        <button onclick="switchMainTab('advisor')" id="tab-btn-advisor" class="studio-btn px-3 py-1.5 rounded-md font-mono font-semibold text-xs text-slate-400 hover:text-white border border-transparent">
+          <i class="fa-solid fa-wand-magic-sparkles mr-1.5 text-purple-400"></i>AI MIX &amp; SUNO v6 ADVISOR
+        </button>
+      </nav>
+
+      <!-- Bridge Status & Credentials Drawer Toggle -->
+      <div class="flex items-center gap-2">
+        <button onclick="pingLocalApiServer()" id="api-health-pill" class="studio-btn flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[#0b0f17] border border-slate-700/80 hover:border-emerald-400/60 font-mono text-[11px]" title="Click to verify Python PyWebView Bridge or Local REST API (:8765)">
+          <span id="api-led" class="w-2.5 h-2.5 rounded-full bg-amber-400 animate-pulse"></span>
+          <span id="api-status-text" class="text-slate-200">CONNECTING PYTHON BRIDGE...</span>
+        </button>
+        <button onclick="toggleCredentialsDrawer()" id="btn-vault-toggle" class="studio-btn px-3 py-1.5 rounded-lg bg-slate-800/80 hover:bg-slate-700 text-amber-300 border border-amber-500/30 font-mono text-[11px] flex items-center gap-1.5">
+          <i class="fa-solid fa-key"></i>
+          <span id="vault-btn-label">API Vault</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Collapsible Persistent Credentials Vault (%APPDATA%\hms-stem-cleaner\api_vault.json) -->
+    <div id="credentials-drawer" class="hidden max-w-[1640px] mx-auto mt-2.5 pt-2.5 border-t border-slate-800/80 flex flex-col gap-2">
+      <div class="flex flex-wrap items-center justify-between gap-2 text-[11px] font-mono">
+        <span id="vault-path-label" class="text-slate-400">Vault: Waiting for Python bridge...</span>
+        <div class="flex items-center gap-2">
+          <span id="mvsep-key-badge" class="px-2 py-0.5 rounded bg-slate-900 border border-slate-700 text-slate-400">MVSEP: Not Set</span>
+          <span id="gemini-key-badge" class="px-2 py-0.5 rounded bg-slate-900 border border-slate-700 text-slate-400">Gemini: Not Set</span>
+        </div>
+      </div>
+      <div class="grid grid-cols-1 md:grid-cols-12 gap-2.5 items-center">
+        <div class="md:col-span-5 flex items-center gap-2 bg-[#090b10] px-3 py-1.5 rounded-lg border border-slate-800">
+          <span class="font-mono text-[11px] text-sky-400 whitespace-nowrap"><i class="fa-solid fa-cloud mr-1"></i>MVSep Token:</span>
+          <input id="input-mvsep-key" type="password" value="" placeholder="Paste new mvsep.com API token (blank keeps saved)..." class="w-full bg-transparent text-slate-200 font-mono text-xs focus:outline-none" />
+        </div>
+        <div class="md:col-span-5 flex items-center gap-2 bg-[#090b10] px-3 py-1.5 rounded-lg border border-slate-800">
+          <span class="font-mono text-[11px] text-purple-400 whitespace-nowrap"><i class="fa-solid fa-sparkles mr-1"></i>Gemini API Key:</span>
+          <input id="input-gemini-key" type="password" value="" placeholder="Paste Google AI Studio key (AIza... blank keeps saved)..." class="w-full bg-transparent text-slate-200 font-mono text-xs focus:outline-none" />
+        </div>
+        <div class="md:col-span-2 flex items-center justify-end gap-1.5">
+          <button onclick="toggleKeyMask()" class="studio-btn px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 font-mono text-[11px]" title="Show/Hide Typed Keys">
+            <i id="eye-icon" class="fa-solid fa-eye"></i>
+          </button>
+          <button onclick="refreshVaultStatus()" class="studio-btn px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-sky-300 font-mono text-[11px]" title="Re-read Vault From Disk">
+            <i class="fa-solid fa-rotate"></i>
+          </button>
+          <button onclick="saveCredentialsVault()" class="studio-btn flex-1 px-3 py-1.5 rounded-lg bg-emerald-600/25 hover:bg-emerald-600/40 text-emerald-300 border border-emerald-500/40 font-mono font-semibold text-[11px]">
+            <i class="fa-solid fa-floppy-disk mr-1"></i>Save Vault
+          </button>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- ========================================================================= -->
+  <!-- MAIN WORKSPACE CONTAINER                                                  -->
+  <!-- ========================================================================= -->
+  <main class="flex-1 max-w-[1640px] w-full mx-auto px-4 py-3 flex flex-col gap-3">
+
+    <!-- ======================================================================= -->
+    <!-- 2. REAL-TIME WAVEFORM AUDITION PLAYER & 60 FPS FFT SPECTRUM DECK        -->
+    <!-- ======================================================================= -->
+    <section class="rack-panel rounded-xl p-3 relative">
+      <div class="flex flex-wrap items-center justify-between gap-2 mb-2">
+        <!-- Left: Transport & Local Audio Loader -->
+        <div class="flex flex-wrap items-center gap-2">
+          <span class="font-mono font-bold text-xs text-emerald-400 tracking-wide flex items-center gap-1.5">
+            <i class="fa-solid fa-compact-disc fa-spin" id="deck-spin-icon" style="animation-play-state: paused;"></i>
+            REAL-TIME WAVEFORM &amp; FFT SPECTRUM MONITOR
+          </span>
+
+          <div class="flex items-center gap-1 bg-[#090b10] p-1 rounded-lg border border-slate-800">
+            <button onclick="toggleAudioPlayback()" id="btn-play-pause" class="studio-btn px-3 py-1 rounded bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 font-mono font-bold text-xs flex items-center gap-1.5">
+              <i class="fa-solid fa-play" id="play-icon"></i>
+              <span id="play-label">PLAY</span>
+            </button>
+            <button onclick="stopAudioPlayback()" class="studio-btn px-2.5 py-1 rounded bg-slate-800/80 hover:bg-slate-700 text-slate-300 font-mono text-xs" title="Stop & Return to Zero">
+              <i class="fa-solid fa-stop"></i>
+            </button>
+            <button onclick="toggleSynthDemo()" id="btn-synth-demo" class="studio-btn px-2.5 py-1 rounded bg-purple-500/20 hover:bg-purple-500/35 text-purple-300 border border-purple-500/40 font-mono text-[11px] flex items-center gap-1" title="Generate live multi-stem synth + drum audio signal to test meters & DSP faders">
+              <i class="fa-solid fa-bolt"></i>
+              <span>Test Stem Signal</span>
+            </button>
+            <label class="studio-btn px-2.5 py-1 rounded bg-sky-500/20 hover:bg-sky-500/30 text-sky-300 border border-sky-500/40 font-mono text-[11px] cursor-pointer flex items-center gap-1">
+              <i class="fa-solid fa-folder-open"></i>
+              <span>Load WAV / Master</span>
+              <input id="audio-file-input" type="file" accept="audio/*" class="hidden" onchange="loadUserAudioFile(event)" />
+            </label>
+          </div>
+
+          <span id="loaded-track-badge" class="font-mono text-[11px] text-slate-400 bg-[#090b10] px-2.5 py-1 rounded border border-slate-800 truncate max-w-[260px]">
+            Audition Deck: Ready (Load WAV or Click Test Signal)
+          </span>
+        </div>
+
+        <!-- Right: A/B Bypass & Mix Style Mode Selector -->
+        <div class="flex flex-wrap items-center gap-2">
+          <div class="flex items-center bg-[#090b10] p-0.5 rounded-lg border border-slate-800 font-mono text-[11px]">
+            <button onclick="setABMode('raw')" id="ab-raw-btn" class="px-2.5 py-1 rounded text-slate-400 hover:text-white">
+              A: RAW STEMS
+            </button>
+            <button onclick="setABMode('master')" id="ab-master-btn" class="px-2.5 py-1 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 font-semibold">
+              B: HMS 24-BIT MASTER
+            </button>
+          </div>
+
+          <div class="flex items-center gap-1.5 bg-[#090b10] px-2.5 py-1 rounded-lg border border-purple-500/40">
+            <span class="font-mono text-[11px] text-purple-300 font-semibold">MIX STYLE:</span>
+            <select id="mix-style-select" onchange="onMixStyleChanged(this.value)" class="bg-transparent text-emerald-300 font-mono text-xs font-semibold focus:outline-none cursor-pointer">
+              <option value="auto" class="bg-[#0f141f] text-slate-200">Auto-Detect (Smart M/S Telemetry)</option>
+              <option value="heavy" class="bg-[#0f141f] text-rose-300">Heavy Metal / Industrial (Mid/Side Pocket)</option>
+              <option value="acoustic" class="bg-[#0f141f] text-amber-300">Acoustic / Dynamic Rock (Preserve Center Guitars)</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <!-- Dual Interactive Canvas Deck -->
+      <div class="grid grid-cols-1 lg:grid-cols-12 gap-2.5 items-stretch">
+        <div class="lg:col-span-8 bg-[#07090e] rounded-lg border border-slate-800/90 p-2 flex flex-col justify-between relative overflow-hidden">
+          <div class="flex items-center justify-between text-[10px] font-mono text-slate-400 mb-1 z-10">
+            <span id="time-readout" class="text-emerald-400 font-semibold">00:00.0 / 03:42.0</span>
+            <div class="flex items-center gap-3">
+              <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-[#00ff88]"></span>Vocals Bus</span>
+              <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-[#ff5555]"></span>Rhythm Bus</span>
+              <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-[#61afef]"></span>Music Bus</span>
+            </div>
+            <span id="lufs-readout" class="text-amber-300">Integrated: -9.4 LUFS | True Peak: -0.3 dBTP</span>
+          </div>
+          <div class="relative h-24 w-full cursor-pointer" onclick="scrubWaveform(event)">
+            <canvas id="waveform-canvas" class="w-full h-full block"></canvas>
+          </div>
+        </div>
+
+        <div class="lg:col-span-4 bg-[#07090e] rounded-lg border border-slate-800/90 p-2 flex flex-col justify-between">
+          <div class="flex items-center justify-between text-[10px] font-mono text-slate-400 mb-1">
+            <span>REAL-TIME FFT SPECTRUM (20Hz – 20kHz)</span>
+            <span id="Pocket-carve-indicator" class="text-pink-400 font-semibold">TDR Nova 2.5kHz Carve: -2.5 dB</span>
+          </div>
+          <div class="flex items-center gap-2 h-24">
+            <div class="flex-1 h-full">
+              <canvas id="spectrum-canvas" class="w-full h-full block"></canvas>
+            </div>
+            <div class="w-12 h-full bg-[#0b0e16] rounded border border-slate-800 p-1 flex flex-col justify-between">
+              <div class="flex-1 flex items-end justify-center gap-1.5 px-1">
+                <div class="w-3 h-full bg-slate-900 rounded-sm overflow-hidden flex flex-col justify-end">
+                  <div id="vu-bar-l" class="w-full bg-gradient-to-t from-emerald-500 via-amber-400 to-rose-500 transition-all duration-75" style="height: 18%;"></div>
+                </div>
+                <div class="w-3 h-full bg-slate-900 rounded-sm overflow-hidden flex flex-col justify-end">
+                  <div id="vu-bar-r" class="w-full bg-gradient-to-t from-emerald-500 via-amber-400 to-rose-500 transition-all duration-75" style="height: 16%;"></div>
+                </div>
+              </div>
+              <div class="text-[9px] font-mono text-center text-slate-400 pt-0.5 border-t border-slate-800">
+                L / R
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ======================================================================= -->
+    <!-- TAB 1: 9-SLIDER VST3 CONSOLE & HEADLESS EXECUTION ENGINE                -->
+    <!-- ======================================================================= -->
+    <div id="tab-panel-console" class="flex flex-col gap-3">
+
+      <!-- Folder Routing & Preset Action Bar -->
+      <section class="rack-panel rounded-xl p-3">
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-2.5 items-center">
+          <div class="lg:col-span-5 flex items-center gap-2 bg-[#090b10] px-3 py-1.5 rounded-lg border border-slate-800">
+            <span class="font-mono text-[11px] text-emerald-400 font-semibold whitespace-nowrap">
+              <i class="fa-solid fa-folder-tree mr-1"></i>Source Song Dir:
+            </span>
+            <input id="input-source-dir" type="text" placeholder="Click Browse to pick song stems directory..." class="w-full bg-transparent text-slate-200 font-mono text-xs focus:outline-none" />
+            <button onclick="browseNativeFolder('source')" class="studio-btn px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 font-mono text-[10px]">
+              Browse
+            </button>
+          </div>
+
+          <div class="lg:col-span-4 flex items-center gap-2 bg-[#090b10] px-3 py-1.5 rounded-lg border border-slate-800">
+            <span class="font-mono text-[11px] text-sky-400 font-semibold whitespace-nowrap">
+              <i class="fa-solid fa-hard-drive mr-1"></i>Dest Root:
+            </span>
+            <input id="input-dest-dir" type="text" placeholder="Click Browse to pick export root..." class="w-full bg-transparent text-slate-200 font-mono text-xs focus:outline-none" />
+            <button onclick="browseNativeFolder('dest')" class="studio-btn px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 font-mono text-[10px]">
+              Browse
+            </button>
+          </div>
+
+          <div class="lg:col-span-3 flex items-center justify-end gap-1.5 flex-wrap">
+            <label class="flex items-center gap-1.5 font-mono text-[11px] text-slate-300 cursor-pointer mr-1">
+              <input id="chk-move-raw" type="checkbox" class="accent-emerald-400 rounded" />
+              <span>Move Raw</span>
+            </label>
+            <button onclick="exportMixSettingsJson()" class="studio-btn px-2.5 py-1.5 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border border-emerald-500/40 font-mono text-[11px] font-semibold" title="Save <Song_Name>_MIX_SETTINGS.json">
+              <i class="fa-solid fa-file-export mr-1"></i>Save JSON
+            </button>
+            <label class="studio-btn px-2.5 py-1.5 rounded-lg bg-sky-500/15 hover:bg-sky-500/25 text-sky-300 border border-sky-500/40 font-mono text-[11px] font-semibold cursor-pointer" title="Load <Song_Name>_MIX_SETTINGS.json">
+              <i class="fa-solid fa-file-import mr-1"></i>Load JSON
+              <input type="file" accept=".json" class="hidden" onchange="importMixSettingsJson(event)" />
+            </label>
+            <button onclick="resetAll9Sliders()" class="studio-btn px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 font-mono text-[11px]" title="Reset All 9 Sliders to HMS Defaults">
+              <i class="fa-solid fa-rotate-left"></i>
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <!-- THE 9-SLIDER HARDWARE MIXING CONSOLE & ROTARY VST3 RACK -->
+      <div class="grid grid-cols-1 lg:grid-cols-12 gap-3">
+        <!-- GROUP A: 3 ILLUMINATED MOTOR-FADER STEM BUS STRIPS -->
+        <section class="lg:col-span-5 rack-panel rounded-xl p-3.5 flex flex-col justify-between relative">
+          <div class="flex items-center justify-between border-b border-slate-800 pb-2 mb-3">
+            <div class="flex items-center gap-2">
+              <div class="rack-screw"></div>
+              <h2 class="font-mono font-bold text-xs tracking-wider text-slate-200 uppercase">
+                GROUP A // STEM BUS MOTOR FADERS (1–3)
+              </h2>
+            </div>
+            <span class="font-mono text-[10px] text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/30">
+              32-Bit Float Summing
+            </span>
+          </div>
+
+          <div class="flex flex-col gap-3.5 my-auto">
+            <!-- 1. VOCALS BUS LEVEL -->
+            <div class="bg-[#0a0d14] p-3 rounded-lg border border-emerald-500/30 shadow-inner">
+              <div class="flex items-center justify-between mb-1.5">
+                <div class="flex items-center gap-2">
+                  <span class="w-2.5 h-2.5 rounded-full bg-[#00ff88] shadow-[0_0_8px_#00ff88]"></span>
+                  <span class="font-mono font-bold text-xs text-[#00ff88]">1. VOCALS BUS LEVEL</span>
+                  <span class="text-[10px] font-mono text-slate-400">(Lead / Backing / Choir)</span>
+                </div>
+                <div class="flex items-center gap-1.5">
+                  <button onclick="toggleBusSolo('vocals')" id="solo-vocals" class="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-slate-800 text-slate-400 hover:text-white">S</button>
+                  <button onclick="toggleBusMute('vocals')" id="mute-vocals" class="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-slate-800 text-slate-400 hover:text-white">M</button>
+                  <span id="val-vocals_weight" class="font-mono font-bold text-sm text-[#00ff88] bg-[#090b10] px-2 py-0.5 rounded border border-emerald-500/40 min-w-[54px] text-right">1.08</span>
+                </div>
+              </div>
+              <input id="slider-vocals_weight" type="range" min="0.40" max="1.60" step="0.01" value="1.08"
+                style="--thumb-glow: rgba(0,255,136,0.7);"
+                class="fader-input" oninput="updateParam('vocals_weight', this.value)" ondblclick="updateParam('vocals_weight', 1.08)" />
+              <div class="flex justify-between text-[10px] font-mono text-slate-500 mt-1">
+                <span>0.40 (-8dB)</span>
+                <span class="text-emerald-400/70">Unity: 1.00 | Default: 1.08</span>
+                <span>1.60 (+4dB)</span>
+              </div>
+            </div>
+
+            <!-- 2. RHYTHM BUS LEVEL -->
+            <div class="bg-[#0a0d14] p-3 rounded-lg border border-rose-500/30 shadow-inner">
+              <div class="flex items-center justify-between mb-1.5">
+                <div class="flex items-center gap-2">
+                  <span class="w-2.5 h-2.5 rounded-full bg-[#ff5555] shadow-[0_0_8px_#ff5555]"></span>
+                  <span class="font-mono font-bold text-xs text-[#ff5555]">2. RHYTHM BUS LEVEL</span>
+                  <span class="text-[10px] font-mono text-slate-400">(Drums / Bass / Sub)</span>
+                </div>
+                <div class="flex items-center gap-1.5">
+                  <button onclick="toggleBusSolo('rhythm')" id="solo-rhythm" class="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-slate-800 text-slate-400 hover:text-white">S</button>
+                  <button onclick="toggleBusMute('rhythm')" id="mute-rhythm" class="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-slate-800 text-slate-400 hover:text-white">M</button>
+                  <span id="val-rhythm_weight" class="font-mono font-bold text-sm text-[#ff5555] bg-[#090b10] px-2 py-0.5 rounded border border-rose-500/40 min-w-[54px] text-right">1.04</span>
+                </div>
+              </div>
+              <input id="slider-rhythm_weight" type="range" min="0.40" max="1.60" step="0.01" value="1.04"
+                style="--thumb-glow: rgba(255,85,85,0.7);"
+                class="fader-input" oninput="updateParam('rhythm_weight', this.value)" ondblclick="updateParam('rhythm_weight', 1.04)" />
+              <div class="flex justify-between text-[10px] font-mono text-slate-500 mt-1">
+                <span>0.40 (-8dB)</span>
+                <span class="text-rose-400/70">Unity: 1.00 | Default: 1.04</span>
+                <span>1.60 (+4dB)</span>
+              </div>
+            </div>
+
+            <!-- 3. MUSIC BUS LEVEL -->
+            <div class="bg-[#0a0d14] p-3 rounded-lg border border-sky-500/30 shadow-inner">
+              <div class="flex items-center justify-between mb-1.5">
+                <div class="flex items-center gap-2">
+                  <span class="w-2.5 h-2.5 rounded-full bg-[#61afef] shadow-[0_0_8px_#61afef]"></span>
+                  <span class="font-mono font-bold text-xs text-[#61afef]">3. MUSIC BUS LEVEL</span>
+                  <span class="text-[10px] font-mono text-slate-400">(Guitars / Keys / Synths)</span>
+                </div>
+                <div class="flex items-center gap-1.5">
+                  <button onclick="toggleBusSolo('music')" id="solo-music" class="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-slate-800 text-slate-400 hover:text-white">S</button>
+                  <button onclick="toggleBusMute('music')" id="mute-music" class="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-slate-800 text-slate-400 hover:text-white">M</button>
+                  <span id="val-music_weight" class="font-mono font-bold text-sm text-[#61afef] bg-[#090b10] px-2 py-0.5 rounded border border-sky-500/40 min-w-[54px] text-right">0.90</span>
+                </div>
+              </div>
+              <input id="slider-music_weight" type="range" min="0.40" max="1.60" step="0.01" value="0.90"
+                style="--thumb-glow: rgba(97,175,239,0.7);"
+                class="fader-input" oninput="updateParam('music_weight', this.value)" ondblclick="updateParam('music_weight', 0.90)" />
+              <div class="flex justify-between text-[10px] font-mono text-slate-500 mt-1">
+                <span>0.40 (-8dB)</span>
+                <span class="text-sky-400/70">Default: 0.90 (Leaves Vocal Headroom)</span>
+                <span>1.60 (+4dB)</span>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- GROUP B: 6 HARDWARE ROTARY VST3 & MASTERING RACK UNITS -->
+        <section class="lg:col-span-7 rack-panel rounded-xl p-3.5 flex flex-col justify-between relative">
+          <div class="flex items-center justify-between border-b border-slate-800 pb-2 mb-3">
+            <div class="flex items-center gap-2">
+              <div class="rack-screw"></div>
+              <h2 class="font-mono font-bold text-xs tracking-wider text-slate-200 uppercase">
+                GROUP B // C++ VST3 &amp; MASTERING HARDWARE RACK (4–9)
+              </h2>
+            </div>
+            <span class="font-mono text-[10px] text-pink-400 bg-pink-500/10 px-2 py-0.5 rounded border border-pink-500/30">
+              Drag Knob Vertically or Slide • Double-Click Reset
+            </span>
+          </div>
+
+          <div id="vst-rotary-grid" class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3 my-auto"></div>
+        </section>
+      </div>
+
+      <!-- PRIMARY 6-BUTTON HEADLESS VST3 & MASTERING EXECUTION BAR -->
+      <section class="rack-panel rounded-xl p-3 border border-slate-700/80">
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-2.5">
+          <button onclick="triggerAction('ai_autotune')" class="studio-btn py-3 px-3 rounded-xl bg-gradient-to-b from-purple-900/60 to-purple-950/80 hover:from-purple-800/70 border border-purple-500/50 text-purple-200 font-mono font-bold text-xs flex flex-col items-center justify-center gap-1 shadow-[0_0_20px_rgba(198,120,221,0.15)]">
+            <span class="text-sm text-purple-300"><i class="fa-solid fa-microchip mr-1"></i>0. AI AUTO-TUNE</span>
+            <span class="text-[10px] font-normal text-purple-300/80">Measure Crest &amp; RMS</span>
+          </button>
+
+          <button onclick="triggerAction('dry_run')" class="studio-btn py-3 px-3 rounded-xl bg-gradient-to-b from-amber-900/50 to-amber-950/80 hover:from-amber-800/60 border border-amber-500/50 text-amber-200 font-mono font-bold text-xs flex flex-col items-center justify-center gap-1">
+            <span class="text-sm text-amber-300"><i class="fa-solid fa-magnifying-glass-chart mr-1"></i>1. DRY-RUN AUDIT</span>
+            <span class="text-[10px] font-normal text-amber-300/80">Verify Stem Routing</span>
+          </button>
+
+          <button onclick="triggerAction('live_clean')" class="studio-btn py-3 px-3 rounded-xl bg-gradient-to-b from-emerald-800/70 to-emerald-950/90 hover:from-emerald-700/80 border border-emerald-400/70 text-emerald-100 font-mono font-bold text-xs flex flex-col items-center justify-center gap-1 shadow-[0_0_25px_rgba(0,255,136,0.2)]">
+            <span class="text-sm text-[#00ff88]"><i class="fa-solid fa-bolt mr-1"></i>2. FULL LIVE CLEAN</span>
+            <span class="text-[10px] font-normal text-emerald-300/90">VST3 Buses + 24-Bit Master</span>
+          </button>
+
+          <button onclick="triggerAction('glue_only')" class="studio-btn py-3 px-3 rounded-xl bg-gradient-to-b from-sky-900/60 to-sky-950/80 hover:from-sky-800/70 border border-sky-400/60 text-sky-100 font-mono font-bold text-xs flex flex-col items-center justify-center gap-1">
+            <span class="text-sm text-sky-300"><i class="fa-solid fa-sliders mr-1"></i>3. GLUE MASTER (3s)</span>
+            <span class="text-[10px] font-normal text-sky-300/80">Instant Slider Re-Mix</span>
+          </button>
+
+          <button onclick="triggerAction('gemini_tune')" class="studio-btn py-3 px-3 rounded-xl bg-gradient-to-b from-pink-900/60 to-indigo-950/80 hover:from-pink-800/70 border border-pink-400/60 text-pink-100 font-mono font-bold text-xs flex flex-col items-center justify-center gap-1">
+            <span class="text-sm text-pink-300"><i class="fa-solid fa-wand-magic-sparkles mr-1"></i>GEMINI TUNE WAV</span>
+            <span class="text-[10px] font-normal text-pink-300/80">Multimodal Audio Critique</span>
+          </button>
+
+          <button onclick="triggerAction('rollback')" class="studio-btn py-3 px-3 rounded-xl bg-gradient-to-b from-rose-950/70 to-black hover:from-rose-900/70 border border-rose-500/50 text-rose-200 font-mono font-bold text-xs flex flex-col items-center justify-center gap-1">
+            <span class="text-sm text-rose-400"><i class="fa-solid fa-clock-rotate-left mr-1"></i>4. ROLLBACK VAULT</span>
+            <span class="text-[10px] font-normal text-rose-300/80">Restore _HMS_Rollback_Vault</span>
+          </button>
+        </div>
+      </section>
+    </div>
+
+    <!-- ======================================================================= -->
+    <!-- TAB 2: REAL FLAC-STREAMED MVSEP SPLITTER + MULTI-PASS RECIPE PIPELINE   -->
+    <!-- ======================================================================= -->
+    <div id="tab-panel-mvsep" class="hidden flex-col gap-3">
+
+      <!-- 2A: Real FLAC-Streamed Single-Pass MVSEP Splitter -->
+      <section class="rack-panel rounded-xl p-4">
+        <div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 pb-3 mb-4">
+          <div>
+            <h2 class="font-mono font-bold text-sm text-sky-400">
+              <i class="fa-solid fa-cloud-bolt mr-1.5"></i>MVSEP CLOUD GPU SPLITTER (FLAC-STREAMED + MIRROR FALLBACK)
+            </h2>
+            <p class="text-xs text-slate-400 font-mono mt-0.5">
+              Wired to <code class="text-emerald-300">hms_mvsep_uploader.py</code> &amp; <code class="text-sky-300">hms_mvsep_downloader.py</code> • Auto WAV→FLAC • 600s Stream Timeout • Region-Aware Polling
+            </p>
+          </div>
+          <span class="px-2.5 py-1 rounded bg-sky-500/15 border border-sky-500/40 text-sky-300 font-mono text-[11px]">
+            Endpoints: mvsep.com → mirror → de
+          </span>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-4">
+          <div class="lg:col-span-6 flex flex-col gap-3">
+            <div class="bg-[#090b10] p-3 rounded-lg border border-slate-800">
+              <label class="block font-mono text-xs text-slate-300 mb-1.5">1. Master Audio File (.wav, .flac, .mp3):</label>
+              <div class="flex gap-2">
+                <input id="mvsep-file-path" type="text" placeholder="Click Browse to pick master track (e.g. Threshold of a Day.wav)..." class="w-full bg-[#11151f] px-3 py-2 rounded border border-slate-700 text-slate-200 font-mono text-xs" />
+                <button onclick="browseNativeFolder('mvsep_audio')" class="studio-btn px-3 py-2 rounded bg-sky-500/20 hover:bg-sky-500/30 text-sky-300 border border-sky-500/40 font-mono text-xs whitespace-nowrap">
+                  <i class="fa-solid fa-folder-open mr-1"></i>Browse File
+                </button>
+              </div>
+            </div>
+
+            <div class="bg-[#090b10] p-3 rounded-lg border border-slate-800">
+              <label class="block font-mono text-xs text-slate-300 mb-1.5">2. Export Destination Root Folder:</label>
+              <div class="flex gap-2">
+                <input id="mvsep-dest-root" type="text" placeholder="Click Browse to pick export root (synced with Console Dest Root)..." class="w-full bg-[#11151f] px-3 py-2 rounded border border-slate-700 text-slate-200 font-mono text-xs" />
+                <button onclick="browseNativeFolder('dest')" class="studio-btn px-3 py-2 rounded bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 font-mono text-xs whitespace-nowrap">
+                  <i class="fa-solid fa-hard-drive mr-1"></i>Browse Dir
+                </button>
+              </div>
+            </div>
+
+            <div class="bg-[#090b10] p-3 rounded-lg border border-slate-800 grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label class="block font-mono text-xs text-slate-300 mb-1.5">3. Single-Pass Model (sep_type):</label>
+                <select id="mvsep-model-select" class="w-full bg-[#11151f] px-3 py-2 rounded border border-slate-700 text-emerald-300 font-mono text-xs">
+                  <option value="63">BS Roformer SW (6 Stems) [ID: 63]</option>
+                  <option value="40">BS Roformer (Vocals / Instrumental) [ID: 40]</option>
+                  <option value="49">Mel-Band Roformer Karaoke (Lead / Backing) [ID: 49]</option>
+                  <option value="27">Demucs4 HT 6-Stem [ID: 27]</option>
+                  <option value="37">DrumSep (Kick / Snare / Cymbals / Toms) [ID: 37]</option>
+                  <option value="22">Reverb Removal (noreverb) [ID: 22]</option>
+                  <option value="47">DeNoise (aufr33 &amp; gabox) [ID: 47]</option>
+                </select>
+              </div>
+              <div>
+                <label class="block font-mono text-xs text-slate-300 mb-1.5">4. Output Format (output_format):</label>
+                <select id="mvsep-format-select" class="w-full bg-[#11151f] px-3 py-2 rounded border border-slate-700 text-sky-300 font-mono text-xs">
+                  <option value="1">WAV (Uncompressed, Standard) [ID: 1]</option>
+                  <option value="5">FLAC (Lossless, 24-bit) [ID: 5]</option>
+                  <option value="4">WAV (Uncompressed, 32-bit) [ID: 4]</option>
+                  <option value="2">FLAC (Lossless, 16-bit) [ID: 2]</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <div class="lg:col-span-6 bg-[#090b10] p-4 rounded-lg border border-slate-800 flex flex-col justify-between">
+            <div class="flex flex-col gap-2">
+              <div class="font-mono text-xs font-bold text-slate-200 mb-1">SINGLE-PASS QUICK SPLIT CONTROLS</div>
+              <label class="flex items-center gap-2 font-mono text-xs text-emerald-300 cursor-pointer">
+                <input id="chk-mvsep-autoclean" type="checkbox" checked class="accent-emerald-400 w-4 h-4" />
+                <span>Auto-Populate Console Source Dir &amp; Run HMS DSP After Download</span>
+              </label>
+              <label class="flex items-center gap-2 font-mono text-xs text-sky-300 cursor-pointer">
+                <input id="chk-mvsep-flac-pre" type="checkbox" checked disabled class="accent-sky-400 w-4 h-4" />
+                <span>Auto Lossless WAV → FLAC Pre-Compression (&gt;40 MB Active in Python Engine)</span>
+              </label>
+            </div>
+
+            <!-- Real Python-Driven Progress Bar for Pass 0 (Single Pass) -->
+            <div class="my-3">
+              <div class="flex justify-between font-mono text-[11px] text-slate-400 mb-1">
+                <span id="mvsep-queue-status">Queue Status: Idle</span>
+                <span id="mvsep-queue-pct" class="text-emerald-400 font-bold">0%</span>
+              </div>
+              <div class="w-full h-2.5 bg-slate-900 rounded-full overflow-hidden border border-slate-800">
+                <div id="mvsep-progress-bar" class="h-full bg-gradient-to-r from-sky-500 via-purple-500 to-emerald-400 transition-all duration-300" style="width: 0%;"></div>
+              </div>
+            </div>
+
+            <div class="flex gap-2">
+              <button onclick="startMvsepCloudPipeline()" id="btn-mvsep-single" class="studio-btn flex-1 py-2.5 px-4 rounded-lg bg-gradient-to-r from-sky-600/40 to-emerald-600/40 hover:from-sky-500/50 hover:to-emerald-500/50 border border-emerald-400/60 text-white font-mono font-bold text-xs">
+                <i class="fa-solid fa-rocket mr-1.5"></i>START REAL SINGLE-PASS MVSEP SEPARATION
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 2B: Multi-Pass Stem Recipe Pipeline (Styled in 337 Hardware Rack Aesthetics) -->
+      <section id="hms-recipe-panel" class="rack-panel rounded-xl p-4">
+        <div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 pb-3 mb-4">
+          <div class="flex items-center gap-2.5">
+            <div class="rack-screw"></div>
+            <div>
+              <h2 id="recipe-title" class="font-mono font-bold text-sm text-purple-300">
+                <i class="fa-solid fa-diagram-project mr-1.5 text-emerald-400"></i>MULTI-PASS STEM RECIPE CHAINER (.hms_recipe.json)
+              </h2>
+              <p id="recipe-overview" class="text-xs text-slate-400 font-mono mt-0.5">
+                Pick a Master Audio File above, then click Generate Recipe (Gemini) or drag-and-drop a .hms_recipe.json file here.
+              </p>
+            </div>
+          </div>
+
+          <div class="flex flex-wrap items-center gap-2">
+            <label class="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-[#090b10] border border-slate-700 font-mono text-[11px] text-amber-300 cursor-pointer" title="Test full Pass 1 -> 4 chaining locally without spending MVSEP credits">
+              <input type="checkbox" id="dry-run-toggle" class="accent-amber-400" />
+              <span>Dry Run (No Credits)</span>
+            </label>
+            <button onclick="generateRecipeFromUI()" id="gemini-recipe-btn" class="studio-btn px-3 py-1.5 rounded-lg bg-purple-600/30 hover:bg-purple-600/45 border border-purple-400/60 text-purple-200 font-mono font-bold text-xs">
+              <i class="fa-solid fa-wand-magic-sparkles mr-1"></i>Generate Recipe (Gemini)
+            </button>
+            <label class="studio-btn px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-sky-300 border border-sky-500/40 font-mono font-semibold text-xs cursor-pointer">
+              <i class="fa-solid fa-file-code mr-1"></i>Load Recipe JSON
+              <input type="file" id="recipe-file-input" accept=".json" class="hidden" />
+            </label>
+            <button onclick="runAllRecipePasses()" id="run-all-passes-btn" disabled class="studio-btn px-3.5 py-1.5 rounded-lg bg-emerald-600/30 hover:bg-emerald-500/40 border border-emerald-400/70 text-emerald-200 font-mono font-bold text-xs">
+              <i class="fa-solid fa-play mr-1"></i>AUTO-RUN ALL PASSES
+            </button>
+          </div>
+        </div>
+
+        <div id="recipe-cards-container" class="flex flex-col gap-3">
+          <div class="text-center py-8 px-4 rounded-lg border border-dashed border-slate-700 bg-[#090b10]/70 font-mono text-xs text-slate-400">
+            No multi-pass recipe loaded yet. Drag a <code class="text-emerald-300">.hms_recipe.json</code> file onto this rack panel, click <strong class="text-sky-300">Load Recipe JSON</strong>, or click <strong class="text-purple-300">Generate Recipe (Gemini)</strong>.
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- ======================================================================= -->
+    <!-- TAB 3: GENERATIVE AI MIX CRITIQUE & SUNO v6 TAG ARCHITECT               -->
+    <!-- ======================================================================= -->
+    <div id="tab-panel-advisor" class="hidden flex-col gap-3">
+      <section class="rack-panel rounded-xl p-4">
+        <div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 pb-3 mb-3">
+          <div>
+            <h2 class="font-mono font-bold text-sm text-purple-300">
+              <i class="fa-solid fa-wand-magic-sparkles mr-1.5"></i>GEMINI MULTIMODAL MIX ADVISOR &amp; SUNO v6 PROMPT GENERATOR
+            </h2>
+            <p class="text-xs text-slate-400 font-mono">
+              Powered by <code class="text-purple-300">hms_ai_api_bridge.py</code> &amp; <code class="text-emerald-300">hms_daw_bridge_helpers.py</code>
+            </p>
+          </div>
+          <button onclick="generateSunoAndMixReport()" class="studio-btn px-4 py-2 rounded-lg bg-purple-600/30 hover:bg-purple-600/45 border border-purple-400/60 text-purple-200 font-mono font-bold text-xs">
+            <i class="fa-solid fa-bolt mr-1"></i>Generate AI Mix Report &amp; Suno v6 Style Tags
+          </button>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <div class="bg-[#090b10] p-3.5 rounded-lg border border-slate-800">
+            <h3 class="font-mono font-bold text-xs text-emerald-400 mb-2">ENGINEERING CRITIQUE &amp; BUS DIAGNOSTICS:</h3>
+            <ul id="ai-mix-notes-list" class="space-y-2 font-mono text-xs text-slate-300 list-disc pl-4">
+              <li><strong>Vocal Pocket &amp; Gate (-33.0 dB):</strong> Clean suppression of Suno diffusion hiss between vocal phrases; TDR Nova carving -2.5 dB at 2.5kHz keeps lead vocals forward without harshness.</li>
+              <li><strong>Rhythm Bus Glue (CHOWTape 0.35):</strong> Warm harmonic saturation glues kick and sub-bass transients while preserving 24-bit dynamic punch (Wow &amp; Flutter disabled).</li>
+              <li><strong>Brickwall Ceiling (-0.3 dBTP):</strong> True-peak ceiling prevents inter-sample clipping for streaming distribution.</li>
+            </ul>
+          </div>
+          <div class="bg-[#090b10] p-3.5 rounded-lg border border-slate-800 flex flex-col justify-between">
+            <div>
+              <div class="flex items-center justify-between mb-2">
+                <h3 class="font-mono font-bold text-xs text-purple-400">SUNO v6 CUSTOM MODE STYLE TAGS (&lt;250 CHARS):</h3>
+                <button onclick="copySunoTags()" class="studio-btn px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 font-mono text-[10px]">
+                  <i class="fa-solid fa-copy mr-1"></i>Copy Tags
+                </button>
+              </div>
+              <textarea id="suno-tags-box" rows="3" readonly class="w-full bg-[#11151f] p-2.5 rounded border border-purple-500/30 text-emerald-300 font-mono text-xs focus:outline-none">alt-metal, post-grunge, drop-tuned 7-string guitars, dry studio birch drum kit, tight analog tape punch, dynamic baritone to raspy belted vocals, 24-bit studio master</textarea>
+            </div>
+            <div class="text-[11px] font-mono text-slate-500 mt-2">
+              Auto-saved alongside <code class="text-slate-300">REAPER_MASTERING_GUIDE.txt</code> &amp; stems on every multi-pass render.
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- ======================================================================= -->
+    <!-- 6. BOTTOM LIVE STUDIO TELEMETRY & VST3 DIAGNOSTIC CONSOLE               -->
+    <!-- ======================================================================= -->
+    <section class="rack-panel rounded-xl p-3 flex-1 flex flex-col min-h-[195px]">
+      <div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 pb-2 mb-2">
+        <div class="flex items-center gap-2">
+          <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
+          <h3 class="font-mono font-bold text-xs text-slate-300 tracking-wider">
+            LIVE PYTHON BRIDGE, MVSEP &amp; VST3 TELEMETRY CONSOLE
+          </h3>
+        </div>
+        <div class="flex items-center gap-1.5">
+          <button onclick="copyPayloadsToClipboard()" class="studio-btn px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-sky-300 border border-slate-700 font-mono text-[10px]">
+            <i class="fa-solid fa-terminal mr-1"></i>Copy REST JSON Payload
+          </button>
+          <button onclick="clearConsoleLog()" class="studio-btn px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-400 font-mono text-[10px]">
+            <i class="fa-solid fa-trash-can mr-1"></i>Clear
+          </button>
+        </div>
+      </div>
+
+      <div id="studio-console" class="flex-1 bg-[#06080c] rounded-lg border border-slate-800/90 p-2.5 font-mono text-[11px] leading-relaxed overflow-y-auto max-h-[210px] space-y-1 select-text"></div>
+    </section>
+
+  </main>
+
+  <!-- ========================================================================= -->
+  <!-- UNIFIED v1.4 ENGINE: 9-SLIDER RACK + REAL VAULT + FLAC MVSEP + RECIPES    -->
+  <!-- ========================================================================= -->
+  <script>
+    // -------------------------------------------------------------------------
+    // 1. STUDIO STATE & 9-SLIDER CONFIGURATION
+    // -------------------------------------------------------------------------
+    const STUDIO_DEFAULTS = {
+      vocals_weight: 1.08,
+      rhythm_weight: 1.04,
+      music_weight: 0.90,
+      vocal_gate_db: -33.0,
+      nova_music_pocket_db: -2.5,
+      mjuc_compress: 18.0,
+      mjuc_makeup: 1.5,
+      rhythm_tape_drive: 0.35,
+      master_ceiling_db: -0.3
+    };
+
+    const studioState = { ...STUDIO_DEFAULTS };
+    const busMute = { vocals: false, rhythm: false, music: false };
+    const busSolo = { vocals: false, rhythm: false, music: false };
+    let activeABMode = 'master';
+    let currentRecipe = null;
+    let bridgeInitialized = false;
+
+    const ROTARY_CONFIGS = [
+      { key: 'vocal_gate_db', num: '4', title: 'VOCAL GATE THRESHOLD', subtitle: 'Pre-VST3 Noise Gate', min: -48.0, max: -18.0, step: 0.5, unit: ' dB', color: '#f39c12', decimals: 1 },
+      { key: 'nova_music_pocket_db', num: '5', title: 'TDR NOVA VOCAL POCKET', subtitle: '2.5kHz Mid/Side Carve', min: -6.0, max: 0.0, step: 0.1, unit: ' dB', color: '#ff88aa', decimals: 1 },
+      { key: 'mjuc_compress', num: '6', title: 'KLANGHELM MJUCjr COMP', subtitle: 'Variable-Mu Tube Glue', min: 0.0, max: 40.0, step: 0.5, unit: ' %', color: '#ff88aa', decimals: 1 },
+      { key: 'mjuc_makeup', num: '7', title: 'MJUCjr MAKEUP GAIN', subtitle: 'Post-Tube Output Trim', min: 0.0, max: 6.0, step: 0.1, unit: ' dB', color: '#fab387', decimals: 1 },
+      { key: 'rhythm_tape_drive', num: '8', title: 'CHOWTAPE RHYTHM DRIVE', subtitle: 'Analog Tape Saturation', min: 0.0, max: 1.0, step: 0.01, unit: '', color: '#fab387', decimals: 2 },
+      { key: 'master_ceiling_db', num: '9', title: 'MASTER BRICKWALL CEILING', subtitle: '24-Bit True Peak Limiter', min: -2.0, max: -0.1, step: 0.1, unit: ' dB', color: '#a6e3a1', decimals: 1 }
+    ];
+
+    function escapeHtml(str) {
+      return String(str ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
+    function hasPythonBridge() {
+      return Boolean(window.pywebview && window.pywebview.api);
+    }
+
+    // -------------------------------------------------------------------------
+    // 2. REAL GLOBAL PROGRESS & LOG RECEIVER (CALLED BY PYTHON window.run_js)
+    // -------------------------------------------------------------------------
+    window.hmsUpdateProgress = function ({ pass_id, percent, message, status }) {
+      const safePct = Math.max(0, Math.min(100, Number(percent) || 0));
+      const tag = status === 'error' ? '[ERROR]' : status === 'complete' ? '[SUCCESS]' : '[RUN]';
+
+      // Pass ID 0 is reserved for the Tab 2A Single-Pass Quick Split bar
+      if (Number(pass_id) === 0) {
+        const bar = document.getElementById('mvsep-progress-bar');
+        const statusEl = document.getElementById('mvsep-queue-status');
+        const pctEl = document.getElementById('mvsep-queue-pct');
+        const btn = document.getElementById('btn-mvsep-single');
+        if (bar) bar.style.width = `${safePct}%`;
+        if (pctEl) pctEl.textContent = `${safePct}%`;
+        if (statusEl) statusEl.textContent = message;
+        if (btn && (status === 'complete' || status === 'error')) {
+          btn.disabled = false;
+        }
+        logConsole(`${tag} [MVSEP Single-Pass] (${safePct}%) ${message}`);
+        return;
+      }
+
+      // Pass IDs 1..N target the Multi-Pass Recipe Cards in Tab 2B
+      logConsole(`${tag} [Pass ${pass_id}] (${safePct}%) ${message}`);
+      const card = document.getElementById(`pass-card-${pass_id}`);
+      const badge = document.getElementById(`badge-${pass_id}`);
+      const fill = document.getElementById(`progress-fill-${pass_id}`);
+      const msgEl = document.getElementById(`progress-msg-${pass_id}`);
+      const pctEl = document.getElementById(`progress-pct-${pass_id}`);
+
+      if (!card) return;
+
+      if (fill) fill.style.width = `${safePct}%`;
+      if (pctEl) pctEl.textContent = `${safePct}%`;
+      if (msgEl) msgEl.textContent = message;
+
+      card.classList.remove('running', 'complete', 'error');
+      if (status === 'running') {
+        card.classList.add('running');
+        if (badge) {
+          badge.textContent = `RUNNING ${safePct}%`;
+          badge.className = 'px-2 py-0.5 rounded font-mono text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40';
+        }
+      } else if (status === 'complete') {
+        card.classList.add('complete');
+        if (badge) {
+          badge.textContent = 'COMPLETE';
+          badge.className = 'px-2 py-0.5 rounded font-mono text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40';
+        }
+        card.querySelectorAll('input[type="checkbox"]').forEach(cb => { cb.checked = true; });
+      } else if (status === 'error') {
+        card.classList.add('error');
+        if (badge) {
+          badge.textContent = 'ERROR';
+          badge.className = 'px-2 py-0.5 rounded font-mono text-[10px] font-bold bg-rose-500/20 text-rose-300 border border-rose-500/40';
+        }
+      }
+    };
+
+    // Python can also stream raw log lines directly to the bottom console
+    window.hmsPushConsoleLog = function (message) {
+      logConsole(message);
+    };
+
+    // Python can auto-sync the Console Source Dir when MVSEP finishes downloading stems
+    window.hmsSetSourceSongDir = function (folderPath) {
+      if (!folderPath) return;
+      document.getElementById('input-source-dir').value = folderPath;
+      logConsole(`[SUCCESS] Auto-synced Console Source Song Dir -> ${folderPath}`);
+    };
+
+    // -------------------------------------------------------------------------
+    // 3. REAL PERSISTENT API VAULT SYNC (pywebviewready + api_vault.json)
+    // -------------------------------------------------------------------------
+    async function refreshVaultStatus() {
+      const pathLabel = document.getElementById('vault-path-label');
+      const mvsepBadge = document.getElementById('mvsep-key-badge');
+      const geminiBadge = document.getElementById('gemini-key-badge');
+      const btnLabel = document.getElementById('vault-btn-label');
+
+      if (!hasPythonBridge()) {
+        pathLabel.textContent = 'Vault offline: Launch via python hms_web_daw_launcher.py to persist keys.';
+        return;
+      }
+
+      try {
+        const res = await window.pywebview.api.get_keys_status();
+        if (res.status !== 'ok') {
+          pathLabel.textContent = `Vault error: ${res.error}`;
+          logConsole(`[ERROR] API Vault read failed: ${res.error}`);
+          return;
+        }
+
+        pathLabel.textContent = `Active Vault: ${res.vault_path}`;
+        mvsepBadge.textContent = res.has_mvsep ? `MVSEP: Saved (${res.keys.mvsep_api_key})` : 'MVSEP: Not Set';
+        mvsepBadge.className = res.has_mvsep
+          ? 'px-2 py-0.5 rounded bg-emerald-500/15 border border-emerald-500/40 text-emerald-300'
+          : 'px-2 py-0.5 rounded bg-rose-500/15 border border-rose-500/40 text-rose-300';
+
+        geminiBadge.textContent = res.has_gemini ? `Gemini: Saved (${res.keys.gemini_api_key})` : 'Gemini: Not Set';
+        geminiBadge.className = res.has_gemini
+          ? 'px-2 py-0.5 rounded bg-emerald-500/15 border border-emerald-500/40 text-emerald-300'
+          : 'px-2 py-0.5 rounded bg-slate-900 border border-slate-700 text-slate-400';
+
+        btnLabel.textContent = res.has_mvsep ? 'API Vault (OK)' : 'API Vault (!)';
+        logConsole(`[SUCCESS] Synced persistent API Vault (MVSEP=${res.has_mvsep}, Gemini=${res.has_gemini}).`);
+      } catch (err) {
+        logConsole(`[ERROR] refreshVaultStatus exception: ${err}`);
+      }
+    }
+
+    async function saveCredentialsVault() {
+      if (!hasPythonBridge()) {
+        logConsole('[ERROR] Cannot save vault: Python bridge is not connected. Launch via python hms_web_daw_launcher.py.');
+        return;
+      }
+      const mvsepInput = document.getElementById('input-mvsep-key');
+      const geminiInput = document.getElementById('input-gemini-key');
+      if (!mvsepInput.value.trim() && !geminiInput.value.trim()) {
+        logConsole('[INFO] Vault unchanged: paste a new MVSEP or Gemini key before clicking Save Vault.');
+        return;
+      }
+
+      try {
+        const res = await window.pywebview.api.save_keys({
+          mvsep_api_key: mvsepInput.value,
+          gemini_api_key: geminiInput.value
+        });
+        if (res.status === 'ok') {
+          mvsepInput.value = '';
+          geminiInput.value = '';
+          logConsole(`[SUCCESS] Atomically saved [${(res.saved_fields || []).join(', ')}] to ${res.vault_path}`);
+          await refreshVaultStatus();
+        } else {
+          logConsole(`[ERROR] Failed to save API Vault: ${res.error}`);
+        }
+      } catch (err) {
+        logConsole(`[ERROR] saveCredentialsVault exception: ${err}`);
+      }
+    }
+
+    // -------------------------------------------------------------------------
+    // 4. NATIVE WINDOWS EXPLORER PICKERS (pywebview 6.2.1 FileDialog)
+    // -------------------------------------------------------------------------
+    async function browseNativeFolder(target) {
+      if (!hasPythonBridge()) {
+        logConsole(`[ERROR] Native Explorer picker for "${target}" requires launching via python hms_web_daw_launcher.py.`);
+        return;
+      }
+      try {
+        let res;
+        if (target === 'mvsep_audio') {
+          res = await window.pywebview.api.browse_master_audio();
+        } else {
+          res = await window.pywebview.api.browse_output_folder();
+        }
+        if (res && res.status === 'ok' && res.path) {
+          if (target === 'mvsep_audio') {
+            document.getElementById('mvsep-file-path').value = res.path;
+            logConsole(`[SUCCESS] Selected Master Audio File -> ${res.path}`);
+          } else if (target === 'source') {
+            document.getElementById('input-source-dir').value = res.path;
+            logConsole(`[SUCCESS] Selected Console Source Song Dir -> ${res.path}`);
+          } else if (target === 'dest') {
+            document.getElementById('input-dest-dir').value = res.path;
+            document.getElementById('mvsep-dest-root').value = res.path;
+            logConsole(`[SUCCESS] Synced Export Destination Root -> ${res.path}`);
+          }
+        }
+      } catch (err) {
+        logConsole(`[ERROR] Native file dialog failed: ${err}`);
+      }
+    }
+
+    // Keep Dest Root synced across Tab 1 and Tab 2 when typed manually
+    function syncDestRootInputs() {
+      const consoleDest = document.getElementById('input-dest-dir');
+      const mvsepDest = document.getElementById('mvsep-dest-root');
+      consoleDest.addEventListener('input', () => { mvsepDest.value = consoleDest.value; });
+      mvsepDest.addEventListener('input', () => { consoleDest.value = mvsepDest.value; });
+    }
+
+    // -------------------------------------------------------------------------
+    // 5. REAL FLAC-STREAMED SINGLE-PASS MVSEP + MULTI-PASS RECIPE CHAINER
+    // -------------------------------------------------------------------------
+    async function startMvsepCloudPipeline() {
+      const audioPath = document.getElementById('mvsep-file-path').value.trim();
+      const destRoot = (document.getElementById('mvsep-dest-root').value || document.getElementById('input-dest-dir').value).trim();
+      const sepType = Number(document.getElementById('mvsep-model-select').value);
+      const outputFormat = Number(document.getElementById('mvsep-format-select').value);
+      const autoClean = document.getElementById('chk-mvsep-autoclean').checked;
+
+      if (!audioPath || !destRoot) {
+        logConsole('[ERROR] Select both a Master Audio File and an Export Destination Root Folder before starting MVSEP.');
+        return;
+      }
+      if (!hasPythonBridge()) {
+        logConsole('[ERROR] Python bridge not connected. Launch via python hms_web_daw_launcher.py to run real MVSEP uploads.');
+        return;
+      }
+
+      const btn = document.getElementById('btn-mvsep-single');
+      btn.disabled = true;
+      window.hmsUpdateProgress({ pass_id: 0, percent: 2, message: 'Dispatching FLAC-streamed MVSEP job to Python worker...', status: 'running' });
+
+      try {
+        const res = await window.pywebview.api.start_mvsep_single_pass({
+          audio_path: audioPath,
+          dest_root: destRoot,
+          sep_type: sepType,
+          output_format: outputFormat,
+          auto_clean: autoClean,
+          mix_payload: buildCurrentMixPayload()
+        });
+        if (res && res.status === 'error') {
+          window.hmsUpdateProgress({ pass_id: 0, percent: 0, message: res.error, status: 'error' });
+        }
+      } catch (err) {
+        window.hmsUpdateProgress({ pass_id: 0, percent: 0, message: String(err), status: 'error' });
+      }
+    }
+
+    async function generateRecipeFromUI() {
+      if (!hasPythonBridge()) {
+        logConsole('[ERROR] Recipe generator requires launching via python hms_web_daw_launcher.py.');
+        return;
+      }
+      const audioPath = document.getElementById('mvsep-file-path').value.trim();
+      if (!audioPath) {
+        logConsole('[ERROR] Pick a Master Audio File above before generating a multi-pass recipe.');
+        return;
+      }
+      const styleMap = {
+        auto: 'Auto-Detect',
+        heavy: 'Heavy Metal / Industrial',
+        acoustic: 'Acoustic / Dynamic Rock'
+      };
+      const styleHint = styleMap[document.getElementById('mix-style-select').value] || 'Auto-Detect';
+      const btn = document.getElementById('gemini-recipe-btn');
+      btn.disabled = true;
+      btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin mr-1"></i>Generating...';
+      logConsole(`[RUN] Requesting multi-pass recipe (${styleHint}) for ${audioPath}...`);
+
+      try {
+        const res = await window.pywebview.api.generate_recipe(audioPath, styleHint);
+        if (res && res.status === 'ok' && res.recipe) {
+          loadRecipeIntoUI(res.recipe);
+          const srcTag = String(res.source || 'local').toUpperCase();
+          document.getElementById('recipe-overview').textContent = `[${srcTag}] ${res.recipe.end_user_overview || ''}`;
+          logConsole(`[SUCCESS] Recipe loaded [${srcTag}]${res.saved_path ? ' -> ' + res.saved_path : ''}`);
+        } else {
+          logConsole(`[ERROR] Recipe generation failed: ${res ? res.error : 'Unknown error'}`);
+        }
+      } catch (err) {
+        logConsole(`[ERROR] generateRecipeFromUI exception: ${err}`);
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fa-solid fa-wand-magic-sparkles mr-1"></i>Generate Recipe (Gemini)';
+      }
+    }
+
+    function parseRecipeFile(file) {
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        try {
+          const data = JSON.parse(e.target.result);
+          if (!Array.isArray(data.passes) || data.passes.length === 0) {
+            throw new Error('JSON is missing a non-empty "passes" array.');
+          }
+          loadRecipeIntoUI(data);
+          logConsole(`[SUCCESS] Loaded multi-pass recipe "${file.name}" (${data.passes.length} passes).`);
+        } catch (err) {
+          logConsole(`[ERROR] Invalid recipe JSON: ${err.message}`);
+        }
+      };
+      reader.readAsText(file);
+    }
+
+    function loadRecipeIntoUI(recipe) {
+      currentRecipe = recipe;
+      document.getElementById('recipe-title').innerHTML =
+        `<i class="fa-solid fa-diagram-project mr-1.5 text-emerald-400"></i>${escapeHtml(recipe.recipe_name || 'Untitled Multi-Pass Recipe')}`;
+      document.getElementById('recipe-overview').textContent = recipe.end_user_overview || '';
+      document.getElementById('run-all-passes-btn').disabled = false;
+
+      const container = document.getElementById('recipe-cards-container');
+      container.innerHTML = '';
+
+      recipe.passes.forEach(pass => {
+        const passId = Number(pass.pass_id);
+        const modelLabel = pass.mvsep_config
+          ? `${pass.mvsep_config.model_type || 'MVSEP'}${pass.mvsep_config.opt_params ? ' (' + pass.mvsep_config.opt_params + ')' : ''}`
+          : 'HMS Headless DSP & Bus Router';
+
+        const instructionsHTML = (pass.user_instructions || [])
+          .map((txt, idx) => `
+            <li class="flex items-start gap-2 text-[11px] font-mono text-slate-300">
+              <input type="checkbox" id="chk-${passId}-${idx}" class="mt-0.5 accent-emerald-400" />
+              <label for="chk-${passId}-${idx}">${escapeHtml(txt)}</label>
+            </li>
+          `).join('');
+
+        const outputsList = pass.expected_outputs || Object.keys(pass.bus_routing || {});
+        const outputsHTML = outputsList
+          .map(s => `<span class="px-2 py-0.5 rounded-full bg-[#06080c] border border-slate-700 font-mono text-[10px] text-sky-300">${escapeHtml(s)}</span>`)
+          .join('');
+
+        const card = document.createElement('div');
+        card.className = 'pass-card';
+        card.id = `pass-card-${passId}`;
+        card.innerHTML = `
+          <div class="flex flex-wrap items-center justify-between gap-2 mb-1.5">
+            <div class="flex items-center gap-2">
+              <span class="font-mono font-bold text-xs text-white">PASS ${passId}: ${escapeHtml(pass.stage_name || 'Stage')}</span>
+              <span id="badge-${passId}" class="px-2 py-0.5 rounded font-mono text-[10px] font-bold bg-slate-800 text-slate-400 border border-slate-700">PENDING</span>
+            </div>
+            <button onclick="executeSingleRecipePassUI(${passId})" class="studio-btn px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-emerald-300 border border-emerald-500/30 font-mono text-[11px] font-semibold">
+              <i class="fa-solid fa-play mr-1"></i>Run Pass ${passId}
+            </button>
+          </div>
+          <div class="font-mono text-[11px] text-slate-400 mb-2">
+            Input: <strong class="text-slate-200">${escapeHtml(pass.input_source || 'MASTER_MIX')}</strong>
+            &nbsp;|&nbsp;
+            Engine: <strong class="text-purple-300">${escapeHtml(modelLabel)}</strong>
+          </div>
+          <div class="w-full h-2 bg-[#06080c] rounded-full overflow-hidden border border-slate-800 mb-1">
+            <div id="progress-fill-${passId}" class="h-full bg-gradient-to-r from-sky-500 via-purple-500 to-emerald-400 transition-all duration-300" style="width: 0%;"></div>
+          </div>
+          <div class="flex justify-between font-mono text-[10px] text-slate-400 mb-2">
+            <span id="progress-msg-${passId}">Idle</span>
+            <span id="progress-pct-${passId}" class="text-emerald-400 font-bold">0%</span>
+          </div>
+          <ul class="space-y-1 mb-2">${instructionsHTML}</ul>
+          <div class="flex flex-wrap gap-1.5">${outputsHTML}</div>
+        `;
+        container.appendChild(card);
+      });
+    }
+
+    async function executeSingleRecipePassUI(passId) {
+      if (!currentRecipe) return;
+      const passObj = currentRecipe.passes.find(p => Number(p.pass_id) === Number(passId));
+      const audioPath = document.getElementById('mvsep-file-path').value.trim();
+      const destRoot = (document.getElementById('mvsep-dest-root').value || document.getElementById('input-dest-dir').value).trim();
+      const isDryRun = document.getElementById('dry-run-toggle').checked;
+
+      if (!passObj || !audioPath || !destRoot) {
+        logConsole('[ERROR] Select both a Master Audio File and an Export Destination Root before running a pass.');
+        return;
+      }
+      if (!hasPythonBridge()) {
+        logConsole('[ERROR] Python bridge not connected. Launch via python hms_web_daw_launcher.py.');
+        return;
+      }
+
+      window.hmsUpdateProgress({ pass_id: passId, percent: 2, message: isDryRun ? 'Starting single-pass dry run...' : 'Dispatching pass to Python worker...', status: 'running' });
+      const res = await window.pywebview.api.run_single_pass(passObj, audioPath, destRoot, isDryRun);
+      if (res && res.status === 'error') {
+        window.hmsUpdateProgress({ pass_id: passId, percent: 0, message: res.error, status: 'error' });
+      }
+    }
+
+    async function runAllRecipePasses() {
+      const audioPath = document.getElementById('mvsep-file-path').value.trim();
+      const destRoot = (document.getElementById('mvsep-dest-root').value || document.getElementById('input-dest-dir').value).trim();
+      const isDryRun = document.getElementById('dry-run-toggle').checked;
+
+      if (!currentRecipe || !audioPath || !destRoot) {
+        logConsole('[ERROR] Load/generate a recipe and select both Master Audio File and Export Destination Root first.');
+        return;
+      }
+      if (!hasPythonBridge()) {
+        logConsole('[ERROR] Python bridge not connected. Launch via python hms_web_daw_launcher.py.');
+        return;
+      }
+
+      currentRecipe.passes.forEach(p => {
+        const card = document.getElementById(`pass-card-${p.pass_id}`);
+        if (card) {
+          card.classList.remove('running', 'complete', 'error');
+          document.getElementById(`badge-${p.pass_id}`).textContent = 'QUEUED';
+          document.getElementById(`progress-fill-${p.pass_id}`).style.width = '0%';
+          document.getElementById(`progress-pct-${p.pass_id}`).textContent = '0%';
+          document.getElementById(`progress-msg-${p.pass_id}`).textContent = 'Waiting in queue...';
+        }
+      });
+
+      logConsole('========================================================================');
+      logConsole(`[RUN] Starting ${isDryRun ? '[DRY RUN] ' : ''}sequential ${currentRecipe.passes.length}-pass recipe pipeline...`);
+      await window.pywebview.api.run_all_passes(currentRecipe, audioPath, destRoot, isDryRun);
+    }
+
+    // -------------------------------------------------------------------------
+    // 6. HARDWARE ROTARY KNOBS & 9-SLIDER SYNC
+    // -------------------------------------------------------------------------
+    function renderRotaryCards() {
+      const container = document.getElementById('vst-rotary-grid');
+      container.innerHTML = '';
+
+      ROTARY_CONFIGS.forEach(cfg => {
+        const val = studioState[cfg.key];
+        const card = document.createElement('div');
+        card.className = 'bg-[#0a0d14] p-3 rounded-lg border border-slate-800/90 hover:border-slate-700 flex flex-col justify-between transition-colors';
+        card.innerHTML = `
+          <div class="flex items-start justify-between gap-1 mb-1">
+            <div>
+              <div class="font-mono font-bold text-[11px]" style="color: ${cfg.color}">${cfg.num}. ${cfg.title}</div>
+              <div class="font-mono text-[10px] text-slate-400">${cfg.subtitle}</div>
+            </div>
+            <span id="val-${cfg.key}" class="font-mono font-bold text-xs px-1.5 py-0.5 rounded bg-[#090b10] border border-slate-800" style="color: ${cfg.color}">
+              ${val.toFixed(cfg.decimals)}${cfg.unit}
+            </span>
+          </div>
+
+          <div class="my-1.5 flex items-center justify-center">
+            <div class="rotary-knob-zone relative w-20 h-20 flex items-center justify-center select-none"
+                 data-key="${cfg.key}"
+                 title="Drag up/down to adjust, or double-click to reset to ${STUDIO_DEFAULTS[cfg.key]}${cfg.unit}">
+              <svg class="w-20 h-20 -rotate-90" viewBox="0 0 100 100">
+                <circle cx="50" cy="50" r="38" fill="#0d111a" stroke="#1e293b" stroke-width="8" stroke-dasharray="180 360" stroke-dashoffset="-30" stroke-linecap="round"></circle>
+                <circle id="arc-${cfg.key}" cx="50" cy="50" r="38" fill="none" stroke="${cfg.color}" stroke-width="8" stroke-dasharray="0 360" stroke-dashoffset="-30" stroke-linecap="round"></circle>
+              </svg>
+              <div id="dial-${cfg.key}" class="absolute w-12 h-12 rounded-full bg-gradient-to-b from-slate-700 to-slate-900 border border-slate-500 shadow-lg flex items-start justify-center pt-1.5" style="transform: rotate(0deg);">
+                <span class="w-1 h-3 rounded-full" style="background: ${cfg.color}; box-shadow: 0 0 6px ${cfg.color};"></span>
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <input id="slider-${cfg.key}" type="range" min="${cfg.min}" max="${cfg.max}" step="${cfg.step}" value="${val}"
+              style="--thumb-glow: ${cfg.color};"
+              class="fader-input"
+              oninput="updateParam('${cfg.key}', this.value)"
+              ondblclick="updateParam('${cfg.key}', ${STUDIO_DEFAULTS[cfg.key]})" />
+            <div class="flex justify-between text-[9px] font-mono text-slate-500 mt-1">
+              <span>${cfg.min}${cfg.unit}</span>
+              <span>Def: ${STUDIO_DEFAULTS[cfg.key]}${cfg.unit}</span>
+              <span>${cfg.max}${cfg.unit}</span>
+            </div>
+          </div>
+        `;
+        container.appendChild(card);
+        updateRotaryVisual(cfg.key, val);
+      });
+
+      attachRotaryDragListeners();
+    }
+
+    function updateRotaryVisual(key, rawVal) {
+      const cfg = ROTARY_CONFIGS.find(c => c.key === key);
+      if (!cfg) return;
+      const val = Math.max(cfg.min, Math.min(cfg.max, parseFloat(rawVal)));
+      const norm = (val - cfg.min) / (cfg.max - cfg.min);
+      const angle = -135 + norm * 270;
+      const dial = document.getElementById(`dial-${key}`);
+      const arc = document.getElementById(`arc-${key}`);
+      if (dial) dial.style.transform = `rotate(${angle}deg)`;
+      if (arc) arc.setAttribute('stroke-dasharray', `${(norm * 180).toFixed(1)} 360`);
+    }
+
+    function attachRotaryDragListeners() {
+      document.querySelectorAll('.rotary-knob-zone').forEach(zone => {
+        const key = zone.dataset.key;
+        const cfg = ROTARY_CONFIGS.find(c => c.key === key);
+        let startY = 0;
+        let startVal = 0;
+
+        const onMove = (e) => {
+          const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+          const deltaY = startY - clientY;
+          const range = cfg.max - cfg.min;
+          const nextVal = Math.max(cfg.min, Math.min(cfg.max, startVal + (deltaY / 130) * range));
+          const stepped = Math.round(nextVal / cfg.step) * cfg.step;
+          updateParam(key, stepped);
+        };
+
+        const onUp = () => {
+          window.removeEventListener('mousemove', onMove);
+          window.removeEventListener('mouseup', onUp);
+          window.removeEventListener('touchmove', onMove);
+          window.removeEventListener('touchend', onUp);
+        };
+
+        zone.addEventListener('mousedown', (e) => {
+          startY = e.clientY;
+          startVal = studioState[key];
+          window.addEventListener('mousemove', onMove);
+          window.addEventListener('mouseup', onUp);
+        });
+
+        zone.addEventListener('touchstart', (e) => {
+          startY = e.touches[0].clientY;
+          startVal = studioState[key];
+          window.addEventListener('touchmove', onMove);
+          window.addEventListener('touchend', onUp);
+        });
+
+        zone.addEventListener('dblclick', () => updateParam(key, STUDIO_DEFAULTS[key]));
+      });
+    }
+
+    function updateParam(key, rawValue) {
+      const val = parseFloat(rawValue);
+      if (Number.isNaN(val)) return;
+      studioState[key] = val;
+
+      const slider = document.getElementById(`slider-${key}`);
+      if (slider && parseFloat(slider.value) !== val) slider.value = val;
+
+      const rotaryCfg = ROTARY_CONFIGS.find(c => c.key === key);
+      const badge = document.getElementById(`val-${key}`);
+      if (badge) {
+        badge.textContent = rotaryCfg ? `${val.toFixed(rotaryCfg.decimals)}${rotaryCfg.unit}` : val.toFixed(2);
+      }
+
+      if (rotaryCfg) updateRotaryVisual(key, val);
+      if (key === 'nova_music_pocket_db') {
+        const ind = document.getElementById('Pocket-carve-indicator');
+        if (ind) ind.textContent = `TDR Nova 2.5kHz Carve: ${val.toFixed(1)} dB`;
+      }
+      syncWebAudioDSP();
+      drawWaveformCanvas();
+    }
+
+    function resetAll9Sliders() {
+      Object.entries(STUDIO_DEFAULTS).forEach(([k, v]) => updateParam(k, v));
+      logConsole('[INFO] Reset all 9 VST3 & Bus Sliders to HMS Studio defaults.');
+    }
+
+    function onMixStyleChanged(mode) {
+      if (mode === 'acoustic') {
+        updateParam('vocals_weight', 0.90);
+        updateParam('rhythm_weight', 1.02);
+        updateParam('music_weight', 0.98);
+        updateParam('vocal_gate_db', -38.0);
+        updateParam('nova_music_pocket_db', -1.0);
+        updateParam('mjuc_compress', 14.0);
+        updateParam('mjuc_makeup', 0.5);
+        logConsole('[INFO] Switched to ACOUSTIC / DYNAMIC ROCK: Center guitars preserved, gentle -1.0 dB pocket.');
+      } else if (mode === 'heavy') {
+        updateParam('vocals_weight', 1.08);
+        updateParam('rhythm_weight', 1.04);
+        updateParam('music_weight', 0.90);
+        updateParam('vocal_gate_db', -33.0);
+        updateParam('nova_music_pocket_db', -3.2);
+        updateParam('mjuc_compress', 18.0);
+        updateParam('mjuc_makeup', 1.5);
+        logConsole('[INFO] Switched to HEAVY METAL / INDUSTRIAL: Mid/Side 2.5kHz vocal pocket (-3.2 dB) & tight gate active.');
+      } else {
+        logConsole('[INFO] Switched to AUTO-DETECT mode.');
+      }
+    }
+
+    // -------------------------------------------------------------------------
+    // 7. SAVE / LOAD <Song_Name>_MIX_SETTINGS.json
+    // -------------------------------------------------------------------------
+    function buildCurrentMixPayload() {
+      const sourceDir = document.getElementById('input-source-dir').value.trim();
+      const destDir = document.getElementById('input-dest-dir').value.trim();
+      const mixStyle = document.getElementById('mix-style-select').value;
+      return {
+        schema_version: '1.4',
+        song_dir: sourceDir,
+        dest_root: destDir,
+        mix_style: mixStyle,
+        vocal_gate_db: studioState.vocal_gate_db,
+        master_ceiling_db: studioState.master_ceiling_db,
+        bus_weights: {
+          Vocals: studioState.vocals_weight,
+          Rhythm: studioState.rhythm_weight,
+          Music: studioState.music_weight
+        },
+        vst_overrides: {
+          nova_music_pocket_db: studioState.nova_music_pocket_db,
+          mjuc_compress: studioState.mjuc_compress,
+          mjuc_makeup: studioState.mjuc_makeup,
+          rhythm_tape_drive: studioState.rhythm_tape_drive
+        }
+      };
+    }
+
+    function exportMixSettingsJson() {
+      const payload = buildCurrentMixPayload();
+      const folderName = (payload.song_dir.split(/[\\/]/).pop() || 'Song').replace(/_Stems$/i, '');
+      const fileName = `${folderName}_MIX_SETTINGS.json`;
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = fileName;
+      a.click();
+      URL.revokeObjectURL(url);
+      logConsole(`[SUCCESS] Saved 9-Slider Mix Preset -> ${fileName}`);
+    }
+
+    function importMixSettingsJson(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        try {
+          const data = JSON.parse(e.target.result);
+          if (data.bus_weights) {
+            if (data.bus_weights.Vocals !== undefined) updateParam('vocals_weight', data.bus_weights.Vocals);
+            if (data.bus_weights.Rhythm !== undefined) updateParam('rhythm_weight', data.bus_weights.Rhythm);
+            if (data.bus_weights.Music !== undefined) updateParam('music_weight', data.bus_weights.Music);
+          }
+          if (data.vocal_gate_db !== undefined) updateParam('vocal_gate_db', data.vocal_gate_db);
+          if (data.master_ceiling_db !== undefined) updateParam('master_ceiling_db', data.master_ceiling_db);
+          if (data.vst_overrides) {
+            Object.entries(data.vst_overrides).forEach(([k, v]) => updateParam(k, v));
+          }
+          logConsole(`[SUCCESS] Loaded 9-Slider Mix JSON from "${file.name}".`);
+        } catch (err) {
+          logConsole(`[ERROR] Could not parse Mix JSON file: ${err.message}`);
+        }
+      };
+      reader.readAsText(file);
+    }
+
+    // -------------------------------------------------------------------------
+    // 8. WEB AUDIO API + SYNTH STEM SIGNAL + 60 FPS FFT & WAVEFORM CANVAS
+    // -------------------------------------------------------------------------
+    let audioCtx = null;
+    let analyserNode = null;
+    let gainNode = null;
+    let pocketFilterNode = null;
+    let audioElement = null;
+    let mediaSourceNode = null;
+    let synthInterval = null;
+    let isPlaying = false;
+    let isSynthActive = false;
+    let playheadProgress = 0.28;
+    let waveformPeaks = [];
+
+    function generateMockWaveformPeaks() {
+      waveformPeaks = [];
+      for (let i = 0; i < 180; i++) {
+        const env = Math.sin((i / 180) * Math.PI) * 0.75 + 0.2;
+        waveformPeaks.push({
+          vox: Math.abs(Math.sin(i * 0.31) * Math.cos(i * 0.17)) * env,
+          rhy: Math.abs(Math.cos(i * 0.55)) * env,
+          mus: Math.abs(Math.sin(i * 0.19)) * env
+        });
+      }
+    }
+
+    function ensureAudioContext() {
+      if (!audioCtx) {
+        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+        audioCtx = new AudioContextClass();
+        analyserNode = audioCtx.createAnalyser();
+        analyserNode.fftSize = 256;
+        analyserNode.smoothingTimeConstant = 0.82;
+
+        pocketFilterNode = audioCtx.createBiquadFilter();
+        pocketFilterNode.type = 'peaking';
+        pocketFilterNode.frequency.value = 2500;
+        pocketFilterNode.Q.value = 1.4;
+        pocketFilterNode.gain.value = studioState.nova_music_pocket_db;
+
+        gainNode = audioCtx.createGain();
+        pocketFilterNode.connect(gainNode);
+        gainNode.connect(analyserNode);
+        analyserNode.connect(audioCtx.destination);
+        syncWebAudioDSP();
+      }
+      if (audioCtx.state === 'suspended') audioCtx.resume();
+    }
+
+    function syncWebAudioDSP() {
+      if (!audioCtx || !gainNode || !pocketFilterNode) return;
+      const avgBus = (
+        (busMute.vocals ? 0 : studioState.vocals_weight) +
+        (busMute.rhythm ? 0 : studioState.rhythm_weight) +
+        (busMute.music ? 0 : studioState.music_weight)
+      ) / 3.0;
+      const ceilingGain = Math.pow(10, studioState.master_ceiling_db / 20);
+      gainNode.gain.value = activeABMode === 'raw' ? 0.85 : Math.min(1.4, avgBus * ceilingGain);
+      pocketFilterNode.gain.value = activeABMode === 'raw' ? 0 : studioState.nova_music_pocket_db;
+    }
+
+    function loadUserAudioFile(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+      ensureAudioContext();
+      stopSynthDemo();
+
+      const url = URL.createObjectURL(file);
+      if (!audioElement) {
+        audioElement = new Audio();
+        audioElement.crossOrigin = 'anonymous';
+        mediaSourceNode = audioCtx.createMediaElementSource(audioElement);
+        mediaSourceNode.connect(pocketFilterNode);
+        audioElement.addEventListener('ended', () => stopAudioPlayback());
+      }
+      audioElement.src = url;
+      document.getElementById('loaded-track-badge').textContent = `Track: ${file.name}`;
+      logConsole(`[SUCCESS] Loaded local audio "${file.name}" into Web Audio A/B Deck.`);
+      toggleAudioPlayback(true);
+    }
+
+    function toggleAudioPlayback(forcePlay = false) {
+      ensureAudioContext();
+      if (audioElement && audioElement.src) {
+        if (audioElement.paused || forcePlay) {
+          audioElement.play();
+          setTransportState(true);
+        } else {
+          audioElement.pause();
+          setTransportState(false);
+        }
+      } else {
+        toggleSynthDemo();
+      }
+    }
+
+    function stopAudioPlayback() {
+      if (audioElement) {
+        audioElement.pause();
+        audioElement.currentTime = 0;
+      }
+      stopSynthDemo();
+      playheadProgress = 0;
+      setTransportState(false);
+      drawWaveformCanvas();
+    }
+
+    function toggleSynthDemo() {
+      ensureAudioContext();
+      if (isSynthActive) {
+        stopSynthDemo();
+        setTransportState(false);
+        logConsole('[INFO] Stopped Test Stem Signal Generator.');
+        return;
+      }
+      isSynthActive = true;
+      setTransportState(true);
+      document.getElementById('btn-synth-demo').classList.add('ring-2', 'ring-emerald-400');
+      logConsole('[RUN] Test Stem Signal active — move the 9 sliders to audition real-time EQ/gain.');
+
+      let step = 0;
+      const triggerPulse = () => {
+        if (!isSynthActive || !audioCtx) return;
+        const now = audioCtx.currentTime;
+        if (!busMute.rhythm) {
+          const osc = audioCtx.createOscillator();
+          const g = audioCtx.createGain();
+          osc.type = 'triangle';
+          osc.frequency.setValueAtTime(110, now);
+          osc.frequency.exponentialRampToValueAtTime(42, now + 0.18);
+          g.gain.setValueAtTime(0.35 * studioState.rhythm_weight, now);
+          g.gain.exponentialRampToValueAtTime(0.001, now + 0.22);
+          osc.connect(g); g.connect(pocketFilterNode);
+          osc.start(now); osc.stop(now + 0.23);
+        }
+        if (!busMute.music && step % 2 === 0) {
+          const freqs = [220, 277.18, 329.63, 440];
+          const osc2 = audioCtx.createOscillator();
+          const g2 = audioCtx.createGain();
+          osc2.type = 'sawtooth';
+          osc2.frequency.setValueAtTime(freqs[(step / 2) % freqs.length], now);
+          g2.gain.setValueAtTime(0.08 * studioState.music_weight, now);
+          g2.gain.exponentialRampToValueAtTime(0.001, now + 0.35);
+          osc2.connect(g2); g2.connect(pocketFilterNode);
+          osc2.start(now); osc2.stop(now + 0.36);
+        }
+        if (!busMute.vocals && step % 4 === 1) {
+          const osc3 = audioCtx.createOscillator();
+          const g3 = audioCtx.createGain();
+          osc3.type = 'sine';
+          osc3.frequency.setValueAtTime(659.25, now);
+          osc3.frequency.exponentialRampToValueAtTime(587.33, now + 0.3);
+          g3.gain.setValueAtTime(0.14 * studioState.vocals_weight, now);
+          g3.gain.exponentialRampToValueAtTime(0.001, now + 0.32);
+          osc3.connect(g3); g3.connect(pocketFilterNode);
+          osc3.start(now); osc3.stop(now + 0.33);
+        }
+        step++;
+      };
+      triggerPulse();
+      synthInterval = setInterval(triggerPulse, 260);
+    }
+
+    function stopSynthDemo() {
+      isSynthActive = false;
+      if (synthInterval) clearInterval(synthInterval);
+      synthInterval = null;
+      const btn = document.getElementById('btn-synth-demo');
+      if (btn) btn.classList.remove('ring-2', 'ring-emerald-400');
+    }
+
+    function setTransportState(playing) {
+      isPlaying = playing;
+      document.getElementById('play-icon').className = playing ? 'fa-solid fa-pause' : 'fa-solid fa-play';
+      document.getElementById('play-label').textContent = playing ? 'PAUSE' : 'PLAY';
+      document.getElementById('deck-spin-icon').style.animationPlayState = playing ? 'running' : 'paused';
+    }
+
+    function scrubWaveform(event) {
+      const rect = event.currentTarget.getBoundingClientRect();
+      playheadProgress = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
+      if (audioElement && audioElement.duration) audioElement.currentTime = playheadProgress * audioElement.duration;
+      drawWaveformCanvas();
+    }
+
+    function drawWaveformCanvas() {
+      const canvas = document.getElementById('waveform-canvas');
+      if (!canvas) return;
+      const rect = canvas.parentElement.getBoundingClientRect();
+      canvas.width = rect.width * window.devicePixelRatio;
+      canvas.height = rect.height * window.devicePixelRatio;
+      const ctx = canvas.getContext('2d');
+      ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
+      const w = rect.width, h = rect.height;
+      ctx.clearRect(0, 0, w, h);
+
+      ctx.strokeStyle = '#1e293b';
+      ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(0, h / 2); ctx.lineTo(w, h / 2); ctx.stroke();
+
+      const barCount = waveformPeaks.length;
+      const barWidth = w / barCount;
+      for (let i = 0; i < barCount; i++) {
+        const p = waveformPeaks[i];
+        const x = i * barWidth;
+        const isPast = (i / barCount) <= playheadProgress;
+        if (!busMute.music) {
+          const mh = Math.min(h * 0.46, p.mus * studioState.music_weight * h * 0.38);
+          ctx.fillStyle = isPast ? 'rgba(97, 175, 239, 0.75)' : 'rgba(97, 175, 239, 0.28)';
+          ctx.fillRect(x + 1, h / 2 - mh, Math.max(1.5, barWidth - 1.5), mh * 2);
+        }
+        if (!busMute.rhythm) {
+          const rh = Math.min(h * 0.46, p.rhy * studioState.rhythm_weight * h * 0.34);
+          ctx.fillStyle = isPast ? 'rgba(255, 85, 85, 0.85)' : 'rgba(255, 85, 85, 0.32)';
+          ctx.fillRect(x + 1, h / 2 - rh, Math.max(1.5, barWidth - 1.5), rh * 2);
+        }
+        if (!busMute.vocals) {
+          const vh = Math.min(h * 0.45, p.vox * studioState.vocals_weight * h * 0.30);
+          ctx.fillStyle = isPast ? '#00ff88' : 'rgba(0, 255, 136, 0.42)';
+          ctx.fillRect(x + 1, h / 2 - vh, Math.max(1.5, barWidth - 1.5), vh * 2);
+        }
+      }
+      const px = playheadProgress * w;
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(px, 0); ctx.lineTo(px, h); ctx.stroke();
+    }
+
+    function animateSpectrumAndMeters() {
+      const canvas = document.getElementById('spectrum-canvas');
+      if (canvas) {
+        const rect = canvas.parentElement.getBoundingClientRect();
+        canvas.width = rect.width * window.devicePixelRatio;
+        canvas.height = rect.height * window.devicePixelRatio;
+        const ctx = canvas.getContext('2d');
+        ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
+        const w = rect.width, h = rect.height;
+        ctx.clearRect(0, 0, w, h);
+
+        const bins = 36;
+        const data = new Uint8Array(bins);
+        if (isPlaying && analyserNode) analyserNode.getByteFrequencyData(data);
+        else for (let i = 0; i < bins; i++) data[i] = Math.floor(14 + Math.sin(Date.now() * 0.003 + i * 0.3) * 8);
+
+        const bw = w / bins;
+        for (let i = 0; i < bins; i++) {
+          let v = data[i] / 255;
+          if (i >= 14 && i <= 21) v *= Math.max(0.35, 1 + studioState.nova_music_pocket_db * 0.08);
+          const barH = Math.max(3, v * h * 0.92);
+          const grad = ctx.createLinearGradient(0, h, 0, 0);
+          grad.addColorStop(0, '#00ff88'); grad.addColorStop(0.65, '#61afef'); grad.addColorStop(1, '#ff88aa');
+          ctx.fillStyle = grad;
+          ctx.fillRect(i * bw + 1, h - barH, Math.max(2, bw - 2), barH);
+        }
+
+        const avg = data.reduce((a, b) => a + b, 0) / bins;
+        document.getElementById('vu-bar-l').style.height = `${isPlaying ? Math.min(96, Math.max(12, (avg / 255) * 115 * studioState.vocals_weight)) : 8}%`;
+        document.getElementById('vu-bar-r').style.height = `${isPlaying ? Math.min(96, Math.max(12, (avg / 255) * 112 * studioState.rhythm_weight)) : 7}%`;
+
+        if (isPlaying) {
+          if (audioElement && audioElement.duration) {
+            playheadProgress = audioElement.currentTime / audioElement.duration;
+            const curM = Math.floor(audioElement.currentTime / 60).toString().padStart(2, '0');
+            const curS = (audioElement.currentTime % 60).toFixed(1).padStart(4, '0');
+            const totM = Math.floor(audioElement.duration / 60).toString().padStart(2, '0');
+            const totS = (audioElement.duration % 60).toFixed(1).padStart(4, '0');
+            document.getElementById('time-readout').textContent = `${curM}:${curS} / ${totM}:${totS}`;
+          } else {
+            playheadProgress = (playheadProgress + 0.0012) % 1;
+          }
+          drawWaveformCanvas();
+        }
+      }
+      requestAnimationFrame(animateSpectrumAndMeters);
+    }
+
+    // -------------------------------------------------------------------------
+    // 9. BRIDGE PING & CONSOLE DSP EXECUTION
+    // -------------------------------------------------------------------------
+    async function pingLocalApiServer() {
+      const led = document.getElementById('api-led');
+      const txt = document.getElementById('api-status-text');
+
+      if (hasPythonBridge()) {
+        led.className = 'w-2.5 h-2.5 rounded-full bg-emerald-400 shadow-[0_0_8px_#00ff88]';
+        txt.textContent = 'PYWEBVIEW PYTHON BRIDGE ACTIVE';
+        logConsole('[SUCCESS] Connected to Python backend via window.pywebview.api.');
+        await refreshVaultStatus();
+        return true;
+      }
+
+      try {
+        const resp = await fetch('http://127.0.0.1:8765/health', { method: 'GET' });
+        if (resp.ok) {
+          const data = await resp.json();
+          led.className = 'w-2.5 h-2.5 rounded-full bg-emerald-400 shadow-[0_0_8px_#00ff88]';
+          txt.textContent = `REST API :8765 ONLINE`;
+          logConsole(`[SUCCESS] HMS REST API Health 200 OK -> ${JSON.stringify(data)}`);
+          return true;
+        }
+      } catch (_) {
+        led.className = 'w-2.5 h-2.5 rounded-full bg-rose-400';
+        txt.textContent = 'OFFLINE PREVIEW (LAUNCH VIA PYTHON)';
+        logConsole('[INFO] No Python bridge detected. Run "python hms_web_daw_launcher.py" for live vault, Explorer pickers, and MVSEP.');
+      }
+      return false;
+    }
+
+    async function triggerAction(actionType) {
+      const payload = buildCurrentMixPayload();
+      payload.move_source_files = document.getElementById('chk-move-raw').checked;
+      payload.action = actionType;
+      payload.dry_run = (actionType === 'dry_run');
+
+      logConsole('========================================================================');
+      logConsole(`[RUN] Dispatching console action "${actionType}" -> ${payload.song_dir || '(no song_dir set)'}`);
+
+      if (hasPythonBridge() && typeof window.pywebview.api.execute_stem_cleanup === 'function') {
+        try {
+          const res = await window.pywebview.api.execute_stem_cleanup(payload);
+          if (res && res.status === 'error') {
+            logConsole(`[ERROR] Backend rejected "${actionType}": ${res.error}`);
+          } else {
+            logConsole(`[INFO] Backend accepted "${actionType}": ${JSON.stringify(res)}`);
+          }
+        } catch (err) {
+          logConsole(`[ERROR] execute_stem_cleanup exception: ${err}`);
+        }
+        return;
+      }
+
+      try {
+        const resp = await fetch('http://127.0.0.1:8765/api/clean', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        if (resp.ok) {
+          const json = await resp.json();
+          logConsole(`[SUCCESS] Local REST API (:8765) -> ${JSON.stringify(json)}`);
+          return;
+        }
+      } catch (_) {}
+
+      logConsole(`[ERROR] Cannot execute "${actionType}" offline — launch through python hms_web_daw_launcher.py.`);
+    }
+
+    // -------------------------------------------------------------------------
+    // 10. TABS, SOLO/MUTE, CLIPBOARD & CONSOLE LOGGER
+    // -------------------------------------------------------------------------
+    function switchMainTab(tab) {
+      ['console', 'mvsep', 'advisor'].forEach(t => {
+        const panel = document.getElementById(`tab-panel-${t}`);
+        const btn = document.getElementById(`tab-btn-${t}`);
+        if (t === tab) {
+          panel.classList.remove('hidden');
+          panel.classList.add('flex');
+          btn.className = 'studio-btn px-3 py-1.5 rounded-md font-mono font-semibold text-xs bg-emerald-500/15 text-emerald-300 border border-emerald-500/40 shadow-[0_0_12px_rgba(0,255,136,0.15)]';
+        } else {
+          panel.classList.add('hidden');
+          panel.classList.remove('flex');
+          btn.className = 'studio-btn px-3 py-1.5 rounded-md font-mono font-semibold text-xs text-slate-400 hover:text-white border border-transparent';
+        }
+      });
+    }
+
+    function toggleBusMute(bus) {
+      busMute[bus] = !busMute[bus];
+      document.getElementById(`mute-${bus}`).className = busMute[bus]
+        ? 'px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-rose-500 text-black'
+        : 'px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-slate-800 text-slate-400 hover:text-white';
+      syncWebAudioDSP(); drawWaveformCanvas();
+    }
+
+    function toggleBusSolo(bus) {
+      busSolo[bus] = !busSolo[bus];
+      const anySolo = Object.values(busSolo).some(Boolean);
+      ['vocals', 'rhythm', 'music'].forEach(b => {
+        busMute[b] = anySolo ? !busSolo[b] : false;
+        document.getElementById(`mute-${b}`).className = busMute[b]
+          ? 'px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-rose-500 text-black'
+          : 'px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-slate-800 text-slate-400 hover:text-white';
+      });
+      document.getElementById(`solo-${bus}`).className = busSolo[bus]
+        ? 'px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-amber-400 text-black'
+        : 'px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-slate-800 text-slate-400 hover:text-white';
+      syncWebAudioDSP(); drawWaveformCanvas();
+    }
+
+    function setABMode(mode) {
+      activeABMode = mode;
+      const rawBtn = document.getElementById('ab-raw-btn');
+      const mstBtn = document.getElementById('ab-master-btn');
+      if (mode === 'raw') {
+        rawBtn.className = 'px-2.5 py-1 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40 font-semibold';
+        mstBtn.className = 'px-2.5 py-1 rounded text-slate-400 hover:text-white';
+        logConsole('[INFO] A/B Audition switched to A: RAW UNCLEANED STEMS.');
+      } else {
+        mstBtn.className = 'px-2.5 py-1 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 font-semibold';
+        rawBtn.className = 'px-2.5 py-1 rounded text-slate-400 hover:text-white';
+        logConsole('[INFO] A/B Audition switched to B: HMS 24-BIT MASTER.');
+      }
+      syncWebAudioDSP();
+    }
+
+    function toggleCredentialsDrawer() {
+      document.getElementById('credentials-drawer').classList.toggle('hidden');
+    }
+
+    function toggleKeyMask() {
+      const m = document.getElementById('input-mvsep-key');
+      const g = document.getElementById('input-gemini-key');
+      const nextType = m.type === 'password' ? 'text' : 'password';
+      m.type = nextType; g.type = nextType;
+    }
+
+    function generateSunoAndMixReport() {
+      const style = document.getElementById('mix-style-select').value;
+      const tagsBox = document.getElementById('suno-tags-box');
+      if (style === 'acoustic') {
+        tagsBox.value = 'dynamic acoustic rock, 12-string dreadnought guitar, dry studio birch drum kit, emotional raspy vocals, analog tape warmth, 24-bit master';
+      } else {
+        tagsBox.value = 'heavy industrial alt-metal, drop-tuned 7-string guitars, dry studio birch kit, punchy tape saturation, dynamic baritone to raspy screams, 24-bit master';
+      }
+      logConsole('[SUCCESS] Updated Suno v6 Custom Mode style tags for current Mix Style.');
+    }
+
+    function copySunoTags() {
+      navigator.clipboard?.writeText(document.getElementById('suno-tags-box').value);
+      logConsole('[SUCCESS] Copied Suno v6 Custom Mode style tags to clipboard.');
+    }
+
+    function copyPayloadsToClipboard() {
+      navigator.clipboard?.writeText(JSON.stringify(buildCurrentMixPayload(), null, 2));
+      logConsole('[SUCCESS] Copied current 9-Slider JSON payload to clipboard.');
+    }
+
+    function clearConsoleLog() {
+      document.getElementById('studio-console').innerHTML = '';
+    }
+
+    function logConsole(message) {
+      const consoleEl = document.getElementById('studio-console');
+      const line = document.createElement('div');
+      const ts = new Date().toLocaleTimeString('en-US', { hour12: false });
+      let colorClass = 'text-slate-300';
+      if (message.includes('[RUN]')) colorClass = 'text-sky-400 font-semibold';
+      else if (message.includes('[SUCCESS]')) colorClass = 'text-[#00ff88] font-semibold';
+      else if (message.includes('[DRY-RUN]')) colorClass = 'text-amber-300 font-semibold';
+      else if (message.includes('[ERROR]')) colorClass = 'text-rose-400 font-bold';
+      else if (message.includes('====')) colorClass = 'text-slate-600';
+      line.className = `${colorClass} font-mono`;
+      line.textContent = `[${ts}] ${message}`;
+      consoleEl.appendChild(line);
+      consoleEl.scrollTop = consoleEl.scrollHeight;
+    }
+
+    // -------------------------------------------------------------------------
+    // 11. BOOT SEQUENCE (WAITS PROPERLY FOR pywebviewready)
+    // -------------------------------------------------------------------------
+    function initBridgeOnce() {
+      if (bridgeInitialized) return;
+      if (hasPythonBridge()) {
+        bridgeInitialized = true;
+        pingLocalApiServer();
+      }
+    }
+
+    window.addEventListener('pywebviewready', initBridgeOnce);
+
+    window.addEventListener('DOMContentLoaded', () => {
+      generateMockWaveformPeaks();
+      renderRotaryCards();
+      drawWaveformCanvas();
+      animateSpectrumAndMeters();
+      syncDestRootInputs();
+
+      // Recipe file input & drag-and-drop wiring
+      document.getElementById('recipe-file-input').addEventListener('change', (e) => {
+        parseRecipeFile(e.target.files[0]);
+        e.target.value = '';
+      });
+      const panel = document.getElementById('hms-recipe-panel');
+      panel.addEventListener('dragover', (e) => { e.preventDefault(); panel.classList.add('recipe-drop-active'); });
+      panel.addEventListener('dragleave', () => panel.classList.remove('recipe-drop-active'));
+      panel.addEventListener('drop', (e) => {
+        e.preventDefault();
+        panel.classList.remove('recipe-drop-active');
+        if (e.dataTransfer.files.length > 0) parseRecipeFile(e.dataTransfer.files[0]);
+      });
+
+      logConsole('========================================================================');
+      logConsole('[SUCCESS] 337 West Productions — HMS Unified Studio Suite (v1.4 LIVE Web-DAW) Initialized.');
+      logConsole('[INFO] 9 Hardware Controls + Real API Vault + FLAC-Streamed MVSEP + Multi-Pass Recipe Chainer Ready.');
+
+      initBridgeOnce();
+      setTimeout(() => {
+        if (!bridgeInitialized) pingLocalApiServer();
+      }, 1200);
+
+      window.addEventListener('resize', drawWaveformCanvas);
+    });
+  </script>
+
+
+
+<!-- HMS_REAL_PCM_WAVEFORM_ENGINE_V1_4 -->
+<style>
+  #hms-real-wave-card {
+    margin: 10px 0 6px 0;
+    padding: 10px 12px;
+    background: linear-gradient(180deg, #0a101d 0%, #070b14 100%);
+    border: 1px solid #1e2d47;
+    border-radius: 10px;
+    box-shadow: inset 0 0 18px rgba(0, 240, 255, 0.05);
+    font-family: "Segoe UI", system-ui, sans-serif;
+  }
+  .hms-rw-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+  .hms-rw-title {
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.4px;
+    color: #00f0ff;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .hms-rw-badge {
+    font-family: Consolas, monospace;
+    font-size: 10px;
+    padding: 2px 7px;
+    border-radius: 999px;
+    background: #10243a;
+    border: 1px solid #1d4e73;
+    color: #7dd3fc;
+  }
+  .hms-rw-controls {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+  .hms-rw-btn {
+    background: #111a2c;
+    color: #e2e8f0;
+    border: 1px solid #263854;
+    border-radius: 6px;
+    padding: 4px 9px;
+    font-size: 11px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+  .hms-rw-btn:hover {
+    border-color: #00f0ff;
+    color: #00f0ff;
+  }
+  .hms-rw-btn.active {
+    background: #0d2b3e;
+    border-color: #00f0ff;
+    color: #00f0ff;
+    font-weight: 700;
+  }
+  .hms-rw-canvas-wrap {
+    position: relative;
+    width: 100%;
+    border-radius: 7px;
+    overflow: hidden;
+    background: #05080f;
+    border: 1px solid #162235;
+  }
+  #hms-live-scope-canvas {
+    display: block;
+    width: 100%;
+    height: 120px;
+  }
+  #hms-overview-wave-canvas {
+    display: block;
+    width: 100%;
+    height: 76px;
+    cursor: pointer;
+    border-top: 1px solid #162235;
+  }
+  .hms-rw-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-top: 6px;
+    font-family: Consolas, monospace;
+    font-size: 11px;
+    color: #94a3b8;
+    flex-wrap: wrap;
+  }
+  .hms-rw-stereo-wrap {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .hms-rw-meter-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    width: 170px;
+  }
+  .hms-rw-meter-row {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 10px;
+    color: #7dd3fc;
+  }
+  .hms-rw-meter-bar {
+    flex: 1;
+    height: 6px;
+    background: #0f172a;
+    border-radius: 3px;
+    overflow: hidden;
+    border: 1px solid #1e293b;
+  }
+  #hms-rw-meter-fill-l,
+  #hms-rw-meter-fill-r {
+    width: 0%;
+    height: 100%;
+    background: linear-gradient(90deg, #10b981 0%, #f59e0b 75%, #ef4444 100%);
+    transition: width 0.03s linear;
+  }
+</style>
+<script>
+(function () {
+  "use strict";
+
+  let fallbackCtx = null;
+  let localMediaBound = new WeakSet();
+  let decodedBuffer = null;     // AudioBuffer OR pure-JS WAV buffer object
+  let overviewPeaksL = null;    // Float32Array [min, max, ...] for Left channel
+  let overviewPeaksR = null;    // Float32Array [min, max, ...] for Right channel
+  let lastLoadedKey = "";
+  let viewMode = "dual";        // "wave", "fft", "dual"
+  let animStarted = false;
+  let activePlayer = null;
+
+  // Test tone generator for 1-second visual verification
+  let testOsc = null;
+  let testGain = null;
+
+  // Synced legacy canvases and legacy VU meter bars
+  let legacyCanvasEntries = [];
+  let legacyMeterTargets = [];
+  let smoothPctL = 0;
+  let smoothPctR = 0;
+
+  function getAnyAudioContext() {
+    const tap = window.__HMS_TAP__;
+    if (tap && tap.ctx) {
+      if (tap.ctx.state === "suspended") tap.ctx.resume().catch(() => {});
+      return tap.ctx;
+    }
+    if (!fallbackCtx) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      fallbackCtx = new AC();
+    }
+    if (fallbackCtx.state === "suspended") fallbackCtx.resume().catch(() => {});
+    return fallbackCtx;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Pure-JS Stereo PCM WAV Parser (Supports 8/16/24/32-bit PCM, 32-bit Float,
+  // AND Pedalboard/libsndfile WAVE_FORMAT_EXTENSIBLE 0xFFFE 24-bit WAVs!)
+  // ---------------------------------------------------------------------------
+  function parseWavPcmFallback(arrayBuffer) {
+    try {
+      const view = new DataView(arrayBuffer);
+      if (view.byteLength < 44) return null;
+
+      const tag = (off) =>
+        String.fromCharCode(
+          view.getUint8(off), view.getUint8(off + 1),
+          view.getUint8(off + 2), view.getUint8(off + 3)
+        );
+
+      if (tag(0) !== "RIFF" || tag(8) !== "WAVE") return null;
+
+      let offset = 12;
+      let audioFormat = 1;
+      let numChannels = 2;
+      let sampleRate = 44100;
+      let bitsPerSample = 16;
+      let dataOffset = -1;
+      let dataSize = 0;
+
+      while (offset + 8 <= view.byteLength) {
+        const chunkId = tag(offset);
+        const chunkSize = view.getUint32(offset + 4, true);
+        const bodyStart = offset + 8;
+
+        if (chunkId === "fmt " && bodyStart + 16 <= view.byteLength) {
+          audioFormat = view.getUint16(bodyStart, true);
+          numChannels = view.getUint16(bodyStart + 2, true);
+          sampleRate = view.getUint32(bodyStart + 4, true);
+          bitsPerSample = view.getUint16(bodyStart + 14, true);
+          // Unwrap WAVE_FORMAT_EXTENSIBLE (0xFFFE) SubFormat GUID (first 2 bytes = 1 PCM or 3 Float)
+          if (audioFormat === 0xFFFE && chunkSize >= 40 && bodyStart + 26 <= view.byteLength) {
+            audioFormat = view.getUint16(bodyStart + 24, true);
+          }
+        } else if (chunkId === "data") {
+          dataOffset = bodyStart;
+          dataSize = Math.min(chunkSize, view.byteLength - bodyStart);
+          break;
+        }
+        // RIFF chunks are word-aligned (odd chunk sizes have 1 padding byte)
+        offset = bodyStart + chunkSize + (chunkSize & 1);
+      }
+
+      if (dataOffset < 0 || dataSize <= 0 || numChannels < 1) return null;
+
+      const bytesPerSample = Math.max(1, bitsPerSample >> 3);
+      const frameBytes = bytesPerSample * numChannels;
+      const totalFrames = Math.floor(dataSize / frameBytes);
+      if (totalFrames <= 0) return null;
+
+      const chL = new Float32Array(totalFrames);
+      const chR = numChannels > 1 ? new Float32Array(totalFrames) : chL;
+      const bytes = new Uint8Array(arrayBuffer);
+
+      for (let i = 0; i < totalFrames; i++) {
+        const framePos = dataOffset + i * frameBytes;
+        for (let c = 0; c < Math.min(2, numChannels); c++) {
+          const p = framePos + c * bytesPerSample;
+          let sample = 0;
+          if (audioFormat === 3 && bitsPerSample === 32) {
+            sample = view.getFloat32(p, true);
+          } else if (bitsPerSample === 24) {
+            // 24-bit signed little-endian -> sign-extend from bit 23 and scale to [-1, 1]
+            let v = bytes[p] | (bytes[p + 1] << 8) | (bytes[p + 2] << 16);
+            if (v & 0x800000) v |= ~0xFFFFFF;
+            sample = v / 8388608.0;
+          } else if (bitsPerSample === 16) {
+            sample = view.getInt16(p, true) / 32768.0;
+          } else if (bitsPerSample === 32) {
+            sample = view.getInt32(p, true) / 2147483648.0;
+          } else if (bitsPerSample === 8) {
+            sample = (bytes[p] - 128) / 128.0;
+          }
+          if (c === 0) chL[i] = sample;
+          else chR[i] = sample;
+        }
+      }
+
+      return {
+        sampleRate,
+        numberOfChannels: numChannels,
+        length: totalFrames,
+        duration: totalFrames / sampleRate,
+        isPureJsWav: true,
+        bitsPerSample,
+        getChannelData: (c) => (c === 1 && numChannels > 1 ? chR : chL),
+      };
+    } catch (err) {
+      return null;
+    }
+  }
+
+  // Radix-2 real FFT on live PCM slices
+  function computeRealFftMagnitudes(samples) {
+    const N = 512;
+    const re = new Float32Array(N);
+    const im = new Float32Array(N);
+    const len = Math.min(samples.length, N);
+    for (let i = 0; i < len; i++) {
+      const w = 0.5 * (1 - Math.cos((2 * Math.PI * i) / (N - 1)));
+      re[i] = samples[i] * w;
+    }
+    let j = 0;
+    for (let i = 0; i < N; i++) {
+      if (i < j) { const tr = re[i]; re[i] = re[j]; re[j] = tr; }
+      let m = N >> 1;
+      while (m >= 1 && j >= m) { j -= m; m >>= 1; }
+      j += m;
+    }
+    for (let size = 2; size <= N; size <<= 1) {
+      const half = size >> 1;
+      const step = (-2 * Math.PI) / size;
+      for (let i = 0; i < N; i += size) {
+        for (let k = 0; k < half; k++) {
+          const angle = step * k;
+          const wr = Math.cos(angle);
+          const wi = Math.sin(angle);
+          const idx1 = i + k;
+          const idx2 = idx1 + half;
+          const tr = wr * re[idx2] - wi * im[idx2];
+          const ti = wr * im[idx2] + wi * re[idx2];
+          re[idx2] = re[idx1] - tr;
+          im[idx2] = im[idx1] - ti;
+          re[idx1] += tr;
+          im[idx1] += ti;
+        }
+      }
+    }
+    const bins = 64;
+    const out = new Float32Array(bins);
+    for (let b = 0; b < bins; b++) {
+      const start = Math.floor(Math.pow(N / 2, b / bins));
+      const end = Math.max(start + 1, Math.floor(Math.pow(N / 2, (b + 1) / bins)));
+      let sum = 0;
+      for (let k = start; k < end && k < N / 2; k++) {
+        sum += Math.hypot(re[k], im[k]);
+      }
+      const avg = sum / Math.max(1, end - start);
+      const db = 20 * Math.log10(Math.max(avg / (N * 0.25), 1e-5));
+      out[b] = Math.max(0, Math.min(1, (db + 65) / 65));
+    }
+    return out;
+  }
+
+  function buildChannelPeaks(channelData, numColumns) {
+    const blockSize = Math.max(1, Math.floor(channelData.length / numColumns));
+    const peaks = new Float32Array(numColumns * 2);
+    for (let i = 0; i < numColumns; i++) {
+      const start = i * blockSize;
+      const end = Math.min(channelData.length, start + blockSize);
+      let minV = 1.0;
+      let maxV = -1.0;
+      const stride = Math.max(1, Math.floor((end - start) / 128));
+      for (let s = start; s < end; s += stride) {
+        const v = channelData[s];
+        if (v < minV) minV = v;
+        if (v > maxV) maxV = v;
+      }
+      peaks[i * 2] = minV === 1.0 ? 0 : minV;
+      peaks[i * 2 + 1] = maxV === -1.0 ? 0 : maxV;
+    }
+    return peaks;
+  }
+
+  function applyDecodedBuffer(bufObj, labelText) {
+    if (!bufObj) return;
+    decodedBuffer = bufObj;
+    const ch0 = bufObj.getChannelData(0);
+    const ch1 = bufObj.numberOfChannels > 1 ? bufObj.getChannelData(1) : ch0;
+    overviewPeaksL = buildChannelPeaks(ch0, 900);
+    overviewPeaksR = buildChannelPeaks(ch1, 900);
+
+    const statusEl = document.getElementById("hms-rw-status");
+    if (statusEl) {
+      const srKhz = (bufObj.sampleRate / 1000).toFixed(1);
+      const engineTag = bufObj.isPureJsWav ? `Pure-JS ${bufObj.bitsPerSample}-bit WAV` : "WebAudio PCM";
+      statusEl.textContent = `${labelText} | ${bufObj.numberOfChannels}ch ${srKhz}kHz (${engineTag}, ${bufObj.duration.toFixed(1)}s)`;
+    }
+  }
+
+  async function decodeFromArrayBuffer(arrayBuf, labelText) {
+    const statusEl = document.getElementById("hms-rw-status");
+    if (statusEl) statusEl.textContent = `Decoding PCM waveform for ${labelText}...`;
+
+    // Fast path 1: Pure-JS WAV parser (instantly handles Pedalboard 24-bit WAVE_FORMAT_EXTENSIBLE!)
+    const pureWav = parseWavPcmFallback(arrayBuf);
+    if (pureWav) {
+      applyDecodedBuffer(pureWav, labelText);
+      return;
+    }
+
+    // Path 2: Browser native decodeAudioData for MP3 / FLAC / M4A / OGG
+    try {
+      const ctx = getAnyAudioContext();
+      const decoded = await ctx.decodeAudioData(arrayBuf.slice(0));
+      applyDecodedBuffer(decoded, labelText);
+    } catch (err) {
+      if (statusEl) statusEl.textContent = `Decode fallback active (${err.message || "stream-only"})`;
+    }
+  }
+
+  async function decodeAudioUrl(url, labelText) {
+    if (!url || url === lastLoadedKey) return;
+    lastLoadedKey = url;
+    const statusEl = document.getElementById("hms-rw-status");
+    try {
+      const resp = await fetch(url);
+      if (!resp.ok) {
+        if (statusEl) statusEl.textContent = `Audio HTTP ${resp.status} — using live tap`;
+        return;
+      }
+      const buf = await resp.arrayBuffer();
+      await decodeFromArrayBuffer(buf, labelText || "Loaded Track");
+    } catch (err) {
+      if (statusEl) statusEl.textContent = `Stream CORS blocked fetch — using live audio tap`;
+    }
+  }
+
+  function tryAttachPlayerToTap(player) {
+    if (!player || localMediaBound.has(player)) return;
+    localMediaBound.add(player);
+    try { player.crossOrigin = "anonymous"; } catch (e) {}
+    try {
+      const ctx = getAnyAudioContext();
+      // Connecting to ctx.destination triggers our <head> AudioNode.prototype.connect tap automatically!
+      const srcNode = ctx.createMediaElementSource(player);
+      srcNode.connect(ctx.destination);
+    } catch (e) {
+      // Expected if page already bound this <audio> tag — our <head> tap ALREADY captured it!
+    }
+  }
+
+  function resizeCanvasHiDpi(canvas) {
+    const dpr = window.devicePixelRatio || 1;
+    const rect = canvas.getBoundingClientRect();
+    const cssW = rect.width > 10 ? rect.width : (canvas.clientWidth || 420);
+    const cssH = rect.height > 10 ? rect.height : (canvas.clientHeight || 110);
+    const w = Math.max(160, Math.floor(cssW * dpr));
+    const h = Math.max(48, Math.floor(cssH * dpr));
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+    }
+    return { w, h, dpr };
+  }
+
+  function captureLegacyCanvasesAndMeters() {
+    legacyCanvasEntries = [];
+    legacyMeterTargets = [];
+
+    // Mirror onto any visible legacy <canvas> outside our card (only replace once to stop dead draw loops)
+    document.querySelectorAll("canvas").forEach((origCanvas) => {
+      if (origCanvas.closest("#hms-real-wave-card")) return;
+      if (origCanvas.dataset.hmsCloned === "1") {
+        legacyCanvasEntries.push({ canvas: origCanvas, ctx: origCanvas.getContext("2d") });
+        return;
+      }
+      const rect = origCanvas.getBoundingClientRect();
+      if (rect.width < 60 && origCanvas.width < 60) return;
+
+      const fresh = origCanvas.cloneNode(false);
+      fresh.dataset.hmsCloned = "1";
+      // Preserve visible display sizing so CSS layout never collapses
+      if (!fresh.style.width && rect.width > 0) fresh.style.width = "100%";
+      if (!fresh.style.height && rect.height > 0) fresh.style.height = `${Math.round(rect.height)}px`;
+      if (origCanvas.parentNode) {
+        origCanvas.parentNode.replaceChild(fresh, origCanvas);
+        legacyCanvasEntries.push({ canvas: fresh, ctx: fresh.getContext("2d") });
+      }
+    });
+
+    // Discover legacy Left/Right VU meter bars outside our card
+    const meterSelectors = [
+      "[id*='vu' i]", "[class*='vu-' i]", "[class*='vu_' i]",
+      "[id*='meter' i]", "[class*='meter-fill' i]", "[class*='meter-bar' i]",
+      "[id*='level' i]", "meter", "progress"
+    ].join(", ");
+
+    const seen = new Set();
+    document.querySelectorAll(meterSelectors).forEach((el) => {
+      if (el.closest("#hms-real-wave-card") || seen.has(el)) return;
+      const tag = el.tagName.toLowerCase();
+      if (tag !== "meter" && tag !== "progress" && el.children.length > 0) return;
+      if (["button", "span", "label", "input", "svg", "canvas"].includes(tag)) return;
+
+      const idCls = `${el.id || ""} ${typeof el.className === "string" ? el.className : ""}`.toLowerCase();
+      if (/label|text|title|card|wrap|container|deck|panel|value|readout/.test(idCls)) return;
+      seen.add(el);
+
+      let channel = "M";
+      if (/(^|[^a-z])(l|left|ch0|ch1)([^a-z]|$)|vu-?l|meter-?l|bar-?l/i.test(idCls)) channel = "L";
+      else if (/(^|[^a-z])(r|right|ch2)([^a-z]|$)|vu-?r|meter-?r|bar-?r/i.test(idCls)) channel = "R";
+
+      const pRect = el.parentElement ? el.parentElement.getBoundingClientRect() : el.getBoundingClientRect();
+      const isVertical = pRect.height > pRect.width * 1.15;
+      el.style.transition = "none";
+      legacyMeterTargets.push({ el, channel, isVertical, tag });
+    });
+
+    const monoBars = legacyMeterTargets.filter((m) => m.channel === "M");
+    if (monoBars.length === 2) {
+      monoBars[0].channel = "L";
+      monoBars[1].channel = "R";
+    }
+  }
+
+  function renderDualChannelScope(canvas, ctx, samplesL, samplesR, mags, mode) {
+    if (!ctx) return;
+    const { w, h, dpr } = resizeCanvasHiDpi(canvas);
+    ctx.fillStyle = "#05080f";
+    ctx.fillRect(0, 0, w, h);
+
+    // Studio graticule grid
+    ctx.strokeStyle = "rgba(30, 45, 71, 0.55)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, h * 0.25); ctx.lineTo(w, h * 0.25);
+    ctx.moveTo(0, h * 0.50); ctx.lineTo(w, h * 0.50);
+    ctx.moveTo(0, h * 0.75); ctx.lineTo(w, h * 0.75);
+    ctx.stroke();
+
+    if (!samplesL || samplesL.length === 0) {
+      // Subtle center baseline when idle
+      ctx.strokeStyle = "rgba(0, 240, 255, 0.22)";
+      ctx.beginPath();
+      ctx.moveTo(0, h * 0.5); ctx.lineTo(w, h * 0.5);
+      ctx.stroke();
+      return;
+    }
+
+    // FFT Spectrum bars
+    if ((mode === "fft" || mode === "dual") && mags) {
+      const barW = w / mags.length;
+      for (let i = 0; i < mags.length; i++) {
+        const barH = mags[i] * (h * 0.88);
+        const alpha = mode === "dual" ? 0.30 : 0.80;
+        ctx.fillStyle = `rgba(14, 165, 233, ${alpha})`;
+        ctx.fillRect(i * barW + 1, h - barH, Math.max(1, barW - 2), barH);
+      }
+    }
+
+    // Stereo Dual-Trace Real-Time Waveform (Left = Cyan, Right = Emerald)
+    if (mode === "wave" || mode === "dual") {
+      // Trigger on positive-going zero crossing of Left channel to keep wave rock-steady
+      let startIdx = 0;
+      for (let i = 1; i < Math.min(256, samplesL.length - 1); i++) {
+        if (samplesL[i - 1] <= 0 && samplesL[i] > 0) { startIdx = i; break; }
+      }
+      const drawCount = Math.max(64, samplesL.length - startIdx);
+
+      // Right channel trace (Emerald)
+      if (samplesR && samplesR.length >= startIdx + drawCount) {
+        ctx.strokeStyle = "rgba(16, 185, 129, 0.80)";
+        ctx.lineWidth = Math.max(1.2, 1.4 * dpr);
+        ctx.beginPath();
+        for (let i = 0; i < drawCount; i++) {
+          const x = (i / (drawCount - 1)) * w;
+          const y = h * 0.5 - samplesR[startIdx + i] * (h * 0.44);
+          if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+      }
+
+      // Left channel trace (Bright Cyan)
+      ctx.strokeStyle = "#00f0ff";
+      ctx.lineWidth = Math.max(1.5, 1.8 * dpr);
+      ctx.shadowColor = "rgba(0, 240, 255, 0.50)";
+      ctx.shadowBlur = 5;
+      ctx.beginPath();
+      for (let i = 0; i < drawCount; i++) {
+        const x = (i / (drawCount - 1)) * w;
+        const y = h * 0.5 - samplesL[startIdx + i] * (h * 0.44);
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+    }
+  }
+
+  function renderSplitStereoOverview(overCanvas, overCtx, progressRatio) {
+    const ov = resizeCanvasHiDpi(overCanvas);
+    overCtx.fillStyle = "#060a12";
+    overCtx.fillRect(0, 0, ov.w, ov.h);
+
+    const midL = ov.h * 0.26;
+    const midR = ov.h * 0.74;
+    const halfH = ov.h * 0.22;
+
+    // Divider line between L (top) and R (bottom) lanes
+    overCtx.strokeStyle = "#1a2940";
+    overCtx.lineWidth = 1;
+    overCtx.beginPath();
+    overCtx.moveTo(0, ov.h * 0.5); overCtx.lineTo(ov.w, ov.h * 0.5);
+    overCtx.stroke();
+
+    // Lane labels
+    overCtx.fillStyle = "rgba(125, 211, 252, 0.65)";
+    overCtx.font = `bold ${Math.round(9 * ov.dpr)}px Consolas, monospace`;
+    overCtx.textAlign = "left";
+    overCtx.fillText("L", 5 * ov.dpr, 11 * ov.dpr);
+    overCtx.fillStyle = "rgba(52, 211, 153, 0.65)";
+    overCtx.fillText("R", 5 * ov.dpr, ov.h * 0.5 + 11 * ov.dpr);
+
+    if (overviewPeaksL && overviewPeaksR) {
+      const cols = overviewPeaksL.length / 2;
+      const playheadX = progressRatio * ov.w;
+      const colW = Math.max(1, ov.w / cols);
+
+      for (let i = 0; i < cols; i++) {
+        const x = (i / cols) * ov.w;
+        const played = x <= playheadX;
+
+        // Left lane (Top)
+        const lTop = midL - overviewPeaksL[i * 2 + 1] * halfH;
+        const lBot = midL - overviewPeaksL[i * 2] * halfH;
+        overCtx.fillStyle = played ? "#00f0ff" : "#2d4c6e";
+        overCtx.fillRect(x, lTop, colW, Math.max(1.2, lBot - lTop));
+
+        // Right lane (Bottom)
+        const rTop = midR - overviewPeaksR[i * 2 + 1] * halfH;
+        const rBot = midR - overviewPeaksR[i * 2] * halfH;
+        overCtx.fillStyle = played ? "#10b981" : "#1f4e43";
+        overCtx.fillRect(x, rTop, colW, Math.max(1.2, rBot - rTop));
+      }
+
+      // Playhead cursor
+      overCtx.fillStyle = "#ffb800";
+      overCtx.fillRect(playheadX - 1, 0, Math.max(2, 2 * ov.dpr), ov.h);
+    } else {
+      overCtx.fillStyle = "#64748b";
+      overCtx.font = `${Math.round(11 * ov.dpr)}px Consolas, monospace`;
+      overCtx.textAlign = "center";
+      overCtx.fillText(
+        "Click 'Load Audio' (or select a track in A/B Audition) to populate L/R PCM waveforms",
+        ov.w * 0.5,
+        ov.h * 0.5 + 4 * ov.dpr
+      );
+    }
+  }
+
+  function updateLegacyMeters(pctL, pctR) {
+    for (const target of legacyMeterTargets) {
+      const pct = target.channel === "L" ? pctL : (target.channel === "R" ? pctR : Math.max(pctL, pctR));
+      if (target.tag === "meter" || target.tag === "progress") {
+        target.el.max = 100;
+        target.el.value = pct;
+      } else if (target.isVertical) {
+        target.el.style.height = `${pct.toFixed(1)}%`;
+      } else {
+        target.el.style.width = `${pct.toFixed(1)}%`;
+      }
+    }
+  }
+
+  function mountRealWaveformEngine() {
+    if (document.getElementById("hms-real-wave-card")) return;
+
+    const existingAudio = document.getElementById("htmlAudioPlayer") || document.querySelector("audio");
+    const targetHost =
+      document.querySelector(".audition-deck") ||
+      (existingAudio ? existingAudio.parentElement : null) ||
+      document.body;
+
+    const card = document.createElement("div");
+    card.id = "hms-real-wave-card";
+    card.innerHTML = `
+      <div class="hms-rw-header">
+        <div class="hms-rw-title">
+          <span>REAL-TIME STEREO PCM WAVEFORM (L + R)</span>
+          <span class="hms-rw-badge" id="hms-rw-source-badge">READY</span>
+        </div>
+        <div class="hms-rw-controls">
+          <button type="button" class="hms-rw-btn" id="hms-rw-mode-wave">Oscilloscope</button>
+          <button type="button" class="hms-rw-btn" id="hms-rw-mode-fft">FFT</button>
+          <button type="button" class="hms-rw-btn active" id="hms-rw-mode-dual">Dual L/R + FFT</button>
+          <label class="hms-rw-btn" style="margin:0;">
+            Load Audio
+            <input type="file" id="hms-rw-file-input" accept=".wav,.flac,.mp3,.m4a,.ogg" style="display:none;" />
+          </label>
+          <button type="button" class="hms-rw-btn" id="hms-rw-play-btn">Play / Pause</button>
+          <button type="button" class="hms-rw-btn" id="hms-rw-test-btn">Test 440Hz</button>
+        </div>
+      </div>
+      <div class="hms-rw-canvas-wrap">
+        <canvas id="hms-live-scope-canvas"></canvas>
+        <canvas id="hms-overview-wave-canvas" title="Click anywhere on the L/R waveform to seek"></canvas>
+      </div>
+      <div class="hms-rw-footer">
+        <span id="hms-rw-status">Ready — load any 16/24-bit WAV or click 'Test 440Hz' to verify real-time graph</span>
+        <div class="hms-rw-stereo-wrap">
+          <span id="hms-rw-db-readout">L -inf | R -inf dBFS</span>
+          <div class="hms-rw-meter-stack">
+            <div class="hms-rw-meter-row"><span>L</span><div class="hms-rw-meter-bar"><div id="hms-rw-meter-fill-l"></div></div></div>
+            <div class="hms-rw-meter-row"><span>R</span><div class="hms-rw-meter-bar"><div id="hms-rw-meter-fill-r"></div></div></div>
+          </div>
+        </div>
+      </div>
+    `;
+    targetHost.appendChild(card);
+
+    activePlayer = existingAudio;
+    if (!activePlayer) {
+      activePlayer = document.createElement("audio");
+      activePlayer.id = "htmlAudioPlayer";
+      activePlayer.crossOrigin = "anonymous";
+      card.appendChild(activePlayer);
+    } else {
+      activePlayer.crossOrigin = "anonymous";
+    }
+
+    setTimeout(captureLegacyCanvasesAndMeters, 180);
+
+    const scopeCanvas = document.getElementById("hms-live-scope-canvas");
+    const overCanvas = document.getElementById("hms-overview-wave-canvas");
+    const scopeCtx = scopeCanvas.getContext("2d");
+    const overCtx = overCanvas.getContext("2d");
+    const badgeEl = document.getElementById("hms-rw-source-badge");
+    const dbEl = document.getElementById("hms-rw-db-readout");
+    const fillL = document.getElementById("hms-rw-meter-fill-l");
+    const fillR = document.getElementById("hms-rw-meter-fill-r");
+    const fileInput = document.getElementById("hms-rw-file-input");
+    const playBtn = document.getElementById("hms-rw-play-btn");
+    const testBtn = document.getElementById("hms-rw-test-btn");
+
+    // Pick up any AudioBuffer already decoded by page scripts via our <head> tap
+    if (window.__HMS_TAP__ && window.__HMS_TAP__.lastDecodedBuffer) {
+      applyDecodedBuffer(window.__HMS_TAP__.lastDecodedBuffer, "Loaded Track");
+    }
+    window.addEventListener("hms-pcm-decoded", (ev) => {
+      if (ev.detail && ev.detail.buffer) {
+        applyDecodedBuffer(ev.detail.buffer, "Loaded Track");
+      }
+    });
+
+    const modeButtons = {
+      wave: document.getElementById("hms-rw-mode-wave"),
+      fft: document.getElementById("hms-rw-mode-fft"),
+      dual: document.getElementById("hms-rw-mode-dual"),
+    };
+    Object.entries(modeButtons).forEach(([k, btn]) => {
+      btn.addEventListener("click", () => {
+        viewMode = k;
+        Object.values(modeButtons).forEach((b) => b.classList.remove("active"));
+        btn.classList.add("active");
+      });
+    });
+
+    // Built-in 440Hz sine test tone (verifies real-time graph + L/R meters in 1 click)
+    testBtn.addEventListener("click", () => {
+      const ctx = getAnyAudioContext();
+      if (testOsc) {
+        try { testOsc.stop(); testOsc.disconnect(); } catch (e) {}
+        testOsc = null;
+        testBtn.classList.remove("active");
+        testBtn.textContent = "Test 440Hz";
+        return;
+      }
+      testOsc = ctx.createOscillator();
+      testGain = ctx.createGain();
+      testOsc.type = "sine";
+      testOsc.frequency.value = 440;
+      testGain.gain.value = 0.22;
+      testOsc.connect(testGain);
+      testGain.connect(ctx.destination); // Captured automatically by our <head> tap!
+      testOsc.start();
+      testBtn.classList.add("active");
+      testBtn.textContent = "Stop 440Hz";
+    });
+
+    playBtn.addEventListener("click", () => {
+      getAnyAudioContext();
+      tryAttachPlayerToTap(activePlayer);
+      if (activePlayer.paused) activePlayer.play().catch(() => {});
+      else activePlayer.pause();
+    });
+
+    fileInput.addEventListener("change", async (ev) => {
+      const f = ev.target.files && ev.target.files[0];
+      if (!f) return;
+      getAnyAudioContext();
+      tryAttachPlayerToTap(activePlayer);
+      const blobUrl = URL.createObjectURL(f);
+      lastLoadedKey = blobUrl;
+      activePlayer.src = blobUrl;
+      const buf = await f.arrayBuffer();
+      await decodeFromArrayBuffer(buf, f.name);
+      activePlayer.play().catch(() => {});
+    });
+
+    // Capture ANY audio file picked anywhere on the page (including original UI file buttons!)
+    document.addEventListener("change", async (ev) => {
+      const el = ev.target;
+      if (!el || el.tagName !== "INPUT" || el.type !== "file" || el.id === "hms-rw-file-input") return;
+      const f = el.files && el.files[0];
+      if (!f || !/\.(wav|flac|mp3|m4a|ogg)$/i.test(f.name)) return;
+      const buf = await f.arrayBuffer();
+      await decodeFromArrayBuffer(buf, f.name);
+    }, true);
+
+    // Capture ANY <audio> element playing anywhere on the page (even dynamically created ones!)
+    const syncPlayerElement = (el) => {
+      if (!el || el.tagName !== "AUDIO") return;
+      activePlayer = el;
+      tryAttachPlayerToTap(el);
+      const srcUrl = el.currentSrc || el.src;
+      if (srcUrl && srcUrl !== window.location.href) {
+        const shortName = decodeURIComponent(srcUrl.split(/[\\/=?&]/).filter(Boolean).pop() || "Audio Stream");
+        decodeAudioUrl(srcUrl, shortName);
+      }
+    };
+    document.addEventListener("play", (ev) => syncPlayerElement(ev.target), true);
+    document.addEventListener("loadedmetadata", (ev) => syncPlayerElement(ev.target), true);
+
+    overCanvas.addEventListener("click", (ev) => {
+      if (!activePlayer || !activePlayer.duration || !isFinite(activePlayer.duration)) return;
+      const rect = overCanvas.getBoundingClientRect();
+      const ratio = Math.max(0, Math.min(1, (ev.clientX - rect.left) / rect.width));
+      activePlayer.currentTime = ratio * activePlayer.duration;
+    });
+
+    const tmpL = new Float32Array(2048);
+    const tmpR = new Float32Array(2048);
+    const freqBuf = new Uint8Array(256);
+
+    function computePeak(arr) {
+      let pk = 0;
+      for (let i = 0; i < arr.length; i++) {
+        const a = Math.abs(arr[i]);
+        if (a > pk) pk = a;
+      }
+      return pk;
+    }
+
+    function drawFrame() {
+      requestAnimationFrame(drawFrame);
+
+      let samplesL = null;
+      let samplesR = null;
+      let sourceLabel = "IDLE";
+      let tapAnalyser = null;
+
+      // Priority A: Our global <head> stereo Web Audio Tap (captures synth + all Web Audio playback)
+      const tap = window.__HMS_TAP__;
+      if (tap && tap.analyserL && tap.analyserR) {
+        tap.analyserL.getFloatTimeDomainData(tmpL);
+        tap.analyserR.getFloatTimeDomainData(tmpR);
+        const pkL = computePeak(tmpL.subarray(0, 1024));
+        const pkR = computePeak(tmpR.subarray(0, 1024));
+        if (Math.max(pkL, pkR) > 0.00025) {
+          samplesL = tmpL.subarray(0, 1024);
+          samplesR = pkR > 0.0001 ? tmpR.subarray(0, 1024) : samplesL;
+          tapAnalyser = tap.analyserL;
+          sourceLabel = "LIVE STEREO TAP";
+        }
+      }
+
+      // Priority B: Sample-accurate PCM slice from decodedBuffer (works even if WebView2 taints MediaElementSource!)
+      if (!samplesL && decodedBuffer && activePlayer && !activePlayer.paused) {
+        const sr = decodedBuffer.sampleRate;
+        const ch0 = decodedBuffer.getChannelData(0);
+        const ch1 = decodedBuffer.numberOfChannels > 1 ? decodedBuffer.getChannelData(1) : ch0;
+        const startSample = Math.floor(activePlayer.currentTime * sr);
+        if (startSample >= 0 && startSample < ch0.length) {
+          const sliceLen = Math.min(1024, ch0.length - startSample);
+          samplesL = ch0.subarray(startSample, startSample + sliceLen);
+          samplesR = ch1.subarray(startSample, startSample + sliceLen);
+          sourceLabel = decodedBuffer.isPureJsWav ? "24-BIT PCM SYNC" : "PCM SYNC";
+        }
+      }
+
+      if (badgeEl) {
+        const syncCount = legacyCanvasEntries.length;
+        const suffix = syncCount > 0 ? ` (${syncCount + 1} GRAPHS)` : "";
+        badgeEl.textContent = samplesL ? (sourceLabel + suffix) : (decodedBuffer ? "PAUSED" : "READY");
+      }
+
+      let peakL = 0;
+      let peakR = 0;
+      let mags = null;
+      if (samplesL && samplesR) {
+        peakL = computePeak(samplesL);
+        peakR = computePeak(samplesR);
+        if (viewMode === "fft" || viewMode === "dual") {
+          if (tapAnalyser) {
+            tapAnalyser.getByteFrequencyData(freqBuf);
+            mags = new Float32Array(64);
+            for (let b = 0; b < 64; b++) {
+              mags[b] = freqBuf[Math.min(freqBuf.length - 1, Math.floor(b * 2.2))] / 255.0;
+            }
+          } else {
+            mags = computeRealFftMagnitudes(samplesL);
+          }
+        }
+      }
+
+      const dbL = peakL > 1e-5 ? 20 * Math.log10(peakL) : -96;
+      const dbR = peakR > 1e-5 ? 20 * Math.log10(peakR) : -96;
+      const rawPctL = Math.max(0, Math.min(100, ((dbL + 60) / 60) * 100));
+      const rawPctR = Math.max(0, Math.min(100, ((dbR + 60) / 60) * 100));
+      smoothPctL = rawPctL > smoothPctL ? rawPctL : Math.max(0, smoothPctL * 0.88);
+      smoothPctR = rawPctR > smoothPctR ? rawPctR : Math.max(0, smoothPctR * 0.88);
+
+      if (dbEl) {
+        const txtL = dbL <= -90 ? "-inf" : dbL.toFixed(1);
+        const txtR = dbR <= -90 ? "-inf" : dbR.toFixed(1);
+        dbEl.textContent = `L ${txtL} | R ${txtR} dBFS`;
+      }
+      if (fillL) fillL.style.width = `${smoothPctL.toFixed(1)}%`;
+      if (fillR) fillR.style.width = `${smoothPctR.toFixed(1)}%`;
+
+      updateLegacyMeters(smoothPctL, smoothPctR);
+
+      // Draw real-time stereo L/R waveform + FFT on the primary deck canvas
+      renderDualChannelScope(scopeCanvas, scopeCtx, samplesL, samplesR, mags, viewMode);
+
+      // Mirror identical live L/R waveform + FFT onto every legacy canvas on the page!
+      for (const entry of legacyCanvasEntries) {
+        renderDualChannelScope(entry.canvas, entry.ctx, samplesL, samplesR, mags, viewMode);
+      }
+
+      // Draw split Left (top) & Right (bottom) full-track waveform overview
+      const progress =
+        activePlayer && activePlayer.duration > 0 && isFinite(activePlayer.duration)
+          ? Math.max(0, Math.min(1, activePlayer.currentTime / activePlayer.duration))
+          : 0;
+      renderSplitStereoOverview(overCanvas, overCtx, progress);
+    }
+
+    if (!animStarted) {
+      animStarted = true;
+      requestAnimationFrame(drawFrame);
+    }
+  }
+
+  if (document.readyState === "loading") {
+    window.addEventListener("DOMContentLoaded", mountRealWaveformEngine);
+  } else {
+    mountRealWaveformEngine();
+  }
+})();
+</script>
+<!-- /HMS_REAL_PCM_WAVEFORM_ENGINE_V1_4 -->
+
+<!-- HMS_FREE_TIER_MULTIPASS_UI_V1_4 -->
+<style>
+  #hms-free-tier-recipe-card {
+    margin-top: 8px;
+    padding: 10px 12px;
+    background: linear-gradient(180deg, #0b1324 0%, #070d19 100%);
+    border: 1px solid #1e3a5f;
+    border-radius: 8px;
+    font-family: "Segoe UI", system-ui, sans-serif;
+    color: #e2e8f0;
+  }
+  .hms-ft-top-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-bottom: 8px;
+  }
+  .hms-ft-title-group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .hms-ft-pill {
+    font-size: 11px;
+    font-weight: 700;
+    padding: 3px 8px;
+    border-radius: 999px;
+    letter-spacing: 0.3px;
+  }
+  .hms-ft-pill.safe {
+    background: #064e3b;
+    color: #6ee7b7;
+    border: 1px solid #10b981;
+  }
+  .hms-ft-pill.pro {
+    background: #451a03;
+    color: #fcd34d;
+    border: 1px solid #f59e0b;
+  }
+  .hms-ft-toggle-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: #111c32;
+    border: 1px solid #2b456b;
+    border-radius: 6px;
+    padding: 4px 10px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    user-select: none;
+  }
+  .hms-ft-passes-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+  .hms-ft-pass-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 7px;
+    background: #0e1729;
+    border: 1px solid #1f324f;
+    border-radius: 6px;
+    padding: 7px 9px;
+    font-size: 11px;
+    cursor: pointer;
+  }
+  .hms-ft-pass-item:hover {
+    border-color: #38bdf8;
+  }
+  .hms-ft-pass-title {
+    font-weight: 700;
+    color: #7dd3fc;
+    display: block;
+  }
+  .hms-ft-pass-sub {
+    color: #94a3b8;
+    font-size: 10px;
+  }
+  .hms-ft-actions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .hms-ft-btn-run {
+    background: #0284c7;
+    color: #fff;
+    border: none;
+    border-radius: 5px;
+    padding: 6px 14px;
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+  .hms-ft-btn-run:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  .hms-ft-btn-cancel {
+    background: #7f1d1d;
+    color: #fecaca;
+    border: none;
+    border-radius: 5px;
+    padding: 6px 10px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .hms-ft-btn-cancel:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+  #hms-ft-queue-badge {
+    font-family: Consolas, monospace;
+    font-size: 11px;
+    color: #38bdf8;
+  }
+  #hms-ft-log-box {
+    margin-top: 8px;
+    background: #050811;
+    border: 1px solid #1a2942;
+    border-radius: 5px;
+    padding: 6px 9px;
+    font-family: Consolas, monospace;
+    font-size: 11px;
+    max-height: 110px;
+    overflow-y: auto;
+    color: #94a3b8;
+  }
+</style>
+<script>
+(function () {
+  "use strict";
+
+  const API_BASE = "http://127.0.0.1:8765";
+  const PREMIUM_MODELS = new Set(["26", "28", "30"]);
+  const PREMIUM_FORMATS = new Set(["4", "5"]);
+  const STORAGE_KEY = "hms_mvsep_free_tier_safe";
+  let mpPollTimer = null;
+
+  function isFreeTierSafeEnabled() {
+    const cb = document.getElementById("hms-free-tier-safe-cb");
+    if (cb) return cb.checked;
+    const saved = localStorage.getItem(STORAGE_KEY);
+    return saved === null ? true : saved === "true";
+  }
+
+  function applyFreeTierDropdownLocks(freeSafe) {
+    const modelSel = document.getElementById("hms-mvsep-model-select");
+    const fmtSel = document.getElementById("hms-mvsep-format-select");
+    const pill = document.getElementById("hms-ft-mode-pill");
+
+    if (pill) {
+      pill.className = "hms-ft-pill " + (freeSafe ? "safe" : "pro");
+      pill.textContent = freeSafe
+        ? "FREE-TIER SAFE: ON (No Ensembles / 16-Bit Max / 1 Job Queue)"
+        : "FREE-TIER SAFE: OFF (Premium Credits Mode)";
+    }
+
+    if (modelSel) {
+      Array.from(modelSel.options).forEach((opt) => {
+        if (!opt.dataset.origLabel) opt.dataset.origLabel = opt.textContent;
+        const isPrem = PREMIUM_MODELS.has(String(opt.value));
+        opt.disabled = freeSafe && isPrem;
+        opt.textContent = freeSafe && isPrem
+          ? `[PREMIUM BLOCKED] ${opt.dataset.origLabel}`
+          : opt.dataset.origLabel;
+      });
+      if (freeSafe && PREMIUM_MODELS.has(String(modelSel.value))) {
+        modelSel.value = "63"; // Snap safely to BS Roformer SW 6-Stems
+      }
+    }
+
+    if (fmtSel) {
+      Array.from(fmtSel.options).forEach((opt) => {
+        if (!opt.dataset.origLabel) opt.dataset.origLabel = opt.textContent;
+        const isPrem = PREMIUM_FORMATS.has(String(opt.value));
+        opt.disabled = freeSafe && isPrem;
+        opt.textContent = freeSafe && isPrem
+          ? `[PREMIUM BLOCKED] ${opt.dataset.origLabel}`
+          : opt.dataset.origLabel;
+      });
+      if (freeSafe && PREMIUM_FORMATS.has(String(fmtSel.value))) {
+        fmtSel.value = "1"; // Snap safely to WAV 16-bit
+      }
+    }
+  }
+
+  async function callMultipassApi(pyMethod, restPath, method, payload) {
+    if (window.pywebview && window.pywebview.api && typeof window.pywebview.api[pyMethod] === "function") {
+      return payload !== undefined
+        ? await window.pywebview.api[pyMethod](payload)
+        : await window.pywebview.api[pyMethod]();
+    }
+    const opts = { method: method || "GET", headers: { "Content-Type": "application/json" } };
+    if (method === "POST") opts.body = JSON.stringify(payload || {});
+    const resp = await fetch(API_BASE + restPath, opts);
+    return await resp.json();
+  }
+
+  function renderMultipassLogs(lines) {
+    const box = document.getElementById("hms-ft-log-box");
+    if (!box || !Array.isArray(lines) || !lines.length) return;
+    box.innerHTML = lines.map((line) => {
+      const safe = String(line).replace(/</g, "&lt;");
+      let color = "#94a3b8";
+      if (safe.includes("[SUCCESS]")) color = "#22c55e";
+      else if (safe.includes("[ERROR]")) color = "#ef4444";
+      else if (safe.includes("[RUN]")) color = "#38bdf8";
+      return `<div style="color:${color};">${safe}</div>`;
+    }).join("");
+    box.scrollTop = box.scrollHeight;
+  }
+
+  function syncWorkspaceFolder(folderPath) {
+    if (!folderPath) return;
+    const direct = document.getElementById("songDirInput");
+    if (direct && direct.value !== folderPath) {
+      direct.value = folderPath;
+      direct.dispatchEvent(new Event("input", { bubbles: true }));
+      direct.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+  }
+
+  function getSavedTokenFromPage() {
+    const el1 = document.getElementById("mvsepTokenInput");
+    const el2 = document.getElementById("hms-mvsep-key-input");
+    return (el1 && el1.value.trim()) || (el2 && el2.value.trim()) || localStorage.getItem("hms_mvsep_api_token") || "";
+  }
+
+  function mountFreeTierRecipeCard() {
+    if (document.getElementById("hms-free-tier-recipe-card")) {
+      applyFreeTierDropdownLocks(isFreeTierSafeEnabled());
+      return;
+    }
+
+    const splitterDeck = document.getElementById("hms-mvsep-splitter-deck");
+    const host = splitterDeck || document.body;
+
+    const card = document.createElement("div");
+    card.id = "hms-free-tier-recipe-card";
+    card.innerHTML = `
+      <div class="hms-ft-top-row">
+        <div class="hms-ft-title-group">
+          <strong style="font-size:12px;color:#38bdf8;">MULTI-PASS SEQUENTIAL RECIPE CARD (1 JOB AT A TIME)</strong>
+          <span id="hms-ft-mode-pill" class="hms-ft-pill safe">FREE-TIER SAFE: ON</span>
+        </div>
+        <label class="hms-ft-toggle-label" title="Blocks Premium Ensemble models (26/28/30), blocks 24/32-bit formats (4/5), and enforces 1 concurrent cloud job">
+          <input type="checkbox" id="hms-free-tier-safe-cb" checked />
+          Free-Tier Safe Mode (Recommended)
+        </label>
+      </div>
+
+      <div class="hms-ft-passes-grid">
+        <label class="hms-ft-pass-item">
+          <input type="checkbox" class="hms-ft-pass-cb" value="pass1_vocals" checked />
+          <div>
+            <span class="hms-ft-pass-title">Pass 1: Vocals</span>
+            <span class="hms-ft-pass-sub">BS Roformer 124-Band Standalone (sep=40, opt1=171) — keeps Vocals</span>
+          </div>
+        </label>
+        <label class="hms-ft-pass-item">
+          <input type="checkbox" class="hms-ft-pass-cb" value="pass2_music" checked />
+          <div>
+            <span class="hms-ft-pass-title">Pass 2: Music</span>
+            <span class="hms-ft-pass-sub">BS Roformer SW 6-Stems (sep=63) — keeps Guitar, Piano, Other</span>
+          </div>
+        </label>
+        <label class="hms-ft-pass-item">
+          <input type="checkbox" class="hms-ft-pass-cb" value="pass3_rhythm" checked />
+          <div>
+            <span class="hms-ft-pass-title">Pass 3: Rhythm</span>
+            <span class="hms-ft-pass-sub">Demucs4 HT ft (sep=20, opt1=0) — keeps Drums &amp; Bass</span>
+          </div>
+        </label>
+        <label class="hms-ft-pass-item">
+          <input type="checkbox" class="hms-ft-pass-cb" value="pass4_drumsep" />
+          <div>
+            <span class="hms-ft-pass-title">Pass 4 (Optional): DrumSep</span>
+            <span class="hms-ft-pass-sub">DrumSep Standalone (sep=37) — auto-feeds isolated Drums WAV</span>
+          </div>
+        </label>
+      </div>
+
+      <div class="hms-ft-actions">
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+          <button type="button" id="hms-ft-run-multipass-btn" class="hms-ft-btn-run">Run Sequential Multi-Pass Queue</button>
+          <button type="button" id="hms-ft-cancel-multipass-btn" class="hms-ft-btn-cancel" disabled>Cancel Queue</button>
+          <label style="font-size:11px;color:#cbd5e1;display:inline-flex;align-items:center;gap:5px;cursor:pointer;">
+            <input type="checkbox" id="hms-ft-autoclean-cb" checked />
+            Auto-Clean + 24-Bit Master After Final Pass
+          </label>
+        </div>
+        <span id="hms-ft-queue-badge">Queue: Idle (Max 1 Concurrent Job)</span>
+      </div>
+
+      <div id="hms-ft-log-box">
+        [READY] Pick a song in "Browse Song" above, choose your passes, and run sequentially with duplicate stems isolated automatically.
+      </div>
+    `;
+
+    if (splitterDeck) {
+      splitterDeck.appendChild(card);
+    } else {
+      host.prepend(card);
+    }
+
+    const safeCb = document.getElementById("hms-free-tier-safe-cb");
+    const runBtn = document.getElementById("hms-ft-run-multipass-btn");
+    const cancelBtn = document.getElementById("hms-ft-cancel-multipass-btn");
+    const badge = document.getElementById("hms-ft-queue-badge");
+
+    // Restore persisted preference (defaults to Free-Tier Safe ON)
+    const savedPref = localStorage.getItem(STORAGE_KEY);
+    safeCb.checked = savedPref === null ? true : savedPref === "true";
+    applyFreeTierDropdownLocks(safeCb.checked);
+
+    safeCb.addEventListener("change", () => {
+      localStorage.setItem(STORAGE_KEY, String(safeCb.checked));
+      applyFreeTierDropdownLocks(safeCb.checked);
+    });
+
+    runBtn.addEventListener("click", async () => {
+      let songPathEl = document.getElementById("hms-mvsep-song-path");
+      let filePath = songPathEl ? songPathEl.value.trim() : "";
+
+      // If no song selected yet, trigger native file picker automatically
+      if (!filePath) {
+        try {
+          const picked = await callMultipassApi("browse_song_file", "/api/browse_song", "POST", {});
+          if (picked && picked.status === "ok" && picked.file_path) {
+            filePath = picked.file_path;
+            if (songPathEl) songPathEl.value = filePath;
+          }
+        } catch (e) {}
+      }
+
+      if (!filePath) {
+        renderMultipassLogs(["[ERROR] Select a song WAV/FLAC/MP3 file first via 'Browse Song'."]);
+        return;
+      }
+
+      const passIds = Array.from(document.querySelectorAll(".hms-ft-pass-cb:checked")).map((c) => c.value);
+      if (!passIds.length) {
+        renderMultipassLogs(["[ERROR] Check at least one recipe pass to run."]);
+        return;
+      }
+
+      const fmtSel = document.getElementById("hms-mvsep-format-select");
+      let outputFmt = fmtSel ? parseInt(fmtSel.value, 10) : 1;
+      if (safeCb.checked && PREMIUM_FORMATS.has(String(outputFmt))) {
+        outputFmt = 1;
+        if (fmtSel) fmtSel.value = "1";
+      }
+
+      const payload = {
+        file_path: filePath,
+        api_token: getSavedTokenFromPage(),
+        pass_ids: passIds,
+        output_format: outputFmt,
+        free_tier_safe: safeCb.checked,
+        auto_clean: document.getElementById("hms-ft-autoclean-cb").checked,
+      };
+
+      runBtn.disabled = true;
+      cancelBtn.disabled = false;
+      badge.textContent = `Queue: Starting ${passIds.length} sequential pass(es)...`;
+
+      try {
+        const res = await callMultipassApi(
+          "start_mvsep_multipass",
+          "/api/mvsep/multipass/start",
+          "POST",
+          payload
+        );
+        if (!res || res.status !== "ok") {
+          renderMultipassLogs([`[ERROR] ${res ? res.message : "Failed starting sequential queue."}`]);
+          runBtn.disabled = false;
+          cancelBtn.disabled = true;
+          badge.textContent = "Queue: Blocked / Idle";
+          return;
+        }
+
+        if (mpPollTimer) clearInterval(mpPollTimer);
+        mpPollTimer = setInterval(async () => {
+          try {
+            const st = await callMultipassApi("get_mvsep_multipass_status", "/api/mvsep/multipass/status", "GET");
+            if (st && st.logs) renderMultipassLogs(st.logs);
+            if (st && st.song_workspace_dir) syncWorkspaceFolder(st.song_workspace_dir);
+            if (st && st.running) {
+              badge.textContent = `Pass ${st.current_pass_index}/${st.total_passes}: ${st.current_pass_label}`;
+            } else {
+              clearInterval(mpPollTimer);
+              mpPollTimer = null;
+              runBtn.disabled = false;
+              cancelBtn.disabled = true;
+              badge.textContent = st && st.error ? "Queue: Halted (Check Logs)" : "Queue: Complete";
+            }
+          } catch (pollErr) {}
+        }, 1500);
+      } catch (err) {
+        renderMultipassLogs([`[ERROR] Bridge/REST call failed: ${err}`]);
+        runBtn.disabled = false;
+        cancelBtn.disabled = true;
+        badge.textContent = "Queue: Error";
+      }
+    });
+
+    cancelBtn.addEventListener("click", async () => {
+      try {
+        await callMultipassApi("cancel_mvsep_multipass", "/api/mvsep/multipass/cancel", "POST", {});
+        badge.textContent = "Queue: Cancelling...";
+      } catch (e) {}
+    });
+  }
+
+  // Wait briefly so injected #hms-mvsep-splitter-deck mounts first, then dock cleanly inside it
+  function scheduleMount() {
+    setTimeout(mountFreeTierRecipeCard, 350);
+    setTimeout(() => applyFreeTierDropdownLocks(isFreeTierSafeEnabled()), 900);
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", scheduleMount);
+  } else {
+    scheduleMount();
+  }
+  window.addEventListener("pywebviewready", scheduleMount);
+})();
+</script>
+<!-- /HMS_FREE_TIER_MULTIPASS_UI_V1_4 -->
+</body>
+</html>

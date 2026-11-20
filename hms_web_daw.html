@@ -1,6 +1,83 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+<!-- HMS_AUDIO_TAP_V1_4_3 -->
+<script>
+(function () {
+  "use strict";
+  if (window.__HMS_AUDIO_TAP_INSTALLED__) return;
+  window.__HMS_AUDIO_TAP_INSTALLED__ = true;
+
+  const tap = {
+    ctx: null,
+    splitter: null,
+    analyserL: null,
+    analyserR: null,
+    zeroGain: null,
+    lastDecodedBuffer: null,
+    tappedNodes: new WeakSet(),
+  };
+  window.__HMS_TAP__ = tap;
+
+  // Tap ANY Web Audio node connecting to ctx.destination (test synth, AudioBufferSource, MediaElementSource)
+  if (typeof AudioNode !== "undefined" && AudioNode.prototype && AudioNode.prototype.connect) {
+    const origConnect = AudioNode.prototype.connect;
+    AudioNode.prototype.connect = function (dest) {
+      const result = origConnect.apply(this, arguments);
+      try {
+        if (dest && this.context && dest === this.context.destination && !tap.tappedNodes.has(this)) {
+          tap.tappedNodes.add(this);
+          if (!tap.analyserL || tap.ctx !== this.context) {
+            tap.ctx = this.context;
+            tap.splitter = this.context.createChannelSplitter(2);
+            tap.analyserL = this.context.createAnalyser();
+            tap.analyserR = this.context.createAnalyser();
+            tap.analyserL.fftSize = 2048;
+            tap.analyserR.fftSize = 2048;
+            tap.analyserL.smoothingTimeConstant = 0.72;
+            tap.analyserR.smoothingTimeConstant = 0.72;
+
+            // Silent zero-gain sink guarantees Chromium/WebView2 ALWAYS clocks both Analysers
+            tap.zeroGain = this.context.createGain();
+            tap.zeroGain.gain.value = 0.0;
+            tap.tappedNodes.add(tap.zeroGain);
+
+            origConnect.call(tap.splitter, tap.analyserL, 0);
+            origConnect.call(tap.splitter, tap.analyserR, 1);
+            origConnect.call(tap.analyserL, tap.zeroGain);
+            origConnect.call(tap.analyserR, tap.zeroGain);
+            origConnect.call(tap.zeroGain, this.context.destination);
+          }
+          origConnect.call(this, tap.splitter);
+        }
+      } catch (e) {}
+      return result;
+    };
+  }
+
+  // Intercept decodeAudioData so any track decoded by native page code populates the waveform graph immediately
+  const BaseCtx = window.BaseAudioContext || window.AudioContext || window.webkitAudioContext;
+  if (BaseCtx && BaseCtx.prototype && BaseCtx.prototype.decodeAudioData) {
+    const origDecode = BaseCtx.prototype.decodeAudioData;
+    BaseCtx.prototype.decodeAudioData = function (buf, onOk, onErr) {
+      const broadcast = (decoded) => {
+        if (decoded) {
+          tap.lastDecodedBuffer = decoded;
+          window.dispatchEvent(new CustomEvent("hms-pcm-decoded", { detail: { buffer: decoded } }));
+        }
+      };
+      const wrappedOk = typeof onOk === "function" ? (d) => { broadcast(d); onOk(d); } : undefined;
+      const ret = origDecode.call(this, buf, wrappedOk, onErr);
+      if (ret && typeof ret.then === "function") {
+        return ret.then((d) => { broadcast(d); return d; });
+      }
+      return ret;
+    };
+  }
+})();
+</script>
+<!-- /HMS_AUDIO_TAP_V1_4_3 -->
+
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>337 West Productions — HMS Unified Studio Suite v1.3 (Web-DAW)</title>
@@ -1386,6 +1463,245 @@
 
 
 
+
+
+
+<!-- HMS_AB_MASTER_AUDITION_DECK_V1 -->
+<script>
+(function() {
+  const API_BASE = window.location.origin.startsWith("http")
+    ? window.location.origin
+    : "http://127.0.0.1:8765";
+
+  function mountAbAuditionBar() {
+    if (document.getElementById("hms-ab-audition-bar")) return;
+    const deck = document.querySelector(".audition-deck");
+    if (!deck) return;
+
+    const bar = document.createElement("div");
+    bar.id = "hms-ab-audition-bar";
+    bar.style.cssText = "display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;padding-top:6px;border-top:1px solid #162032;";
+    bar.innerHTML = `
+      <div style="display:flex;align-items:center;gap:6px;flex:1;min-width:260px;">
+        <span style="font-size:11px;font-weight:700;color:#00f0ff;white-space:nowrap;">🎧 A/B Audition:</span>
+        <select id="hms-ab-track-select" style="flex:1;background:#090d16;color:#f1f5f9;border:1px solid #263248;border-radius:5px;padding:4px 8px;font-size:11px;font-family:Consolas,monospace;">
+          <option value="">-- Click '↻ Scan Folder WAVs' to load Master & Stems --</option>
+        </select>
+        <button id="hms-ab-scan-btn" type="button" style="padding:4px 9px;font-size:11px;">↻ Scan Folder WAVs</button>
+      </div>
+      <div style="display:flex;align-items:center;gap:6px;flex:1;min-width:240px;">
+        <input type="range" id="hms-ab-seek-slider" min="0" max="100" step="0.1" value="0" style="flex:1;" />
+        <span id="hms-ab-time-readout" style="font-family:Consolas,monospace;font-size:11px;color:#ffb800;min-width:82px;text-align:right;">0:00 / 0:00</span>
+      </div>
+    `;
+    deck.appendChild(bar);
+
+    const player = document.getElementById("htmlAudioPlayer");
+    const selectEl = document.getElementById("hms-ab-track-select");
+    const scanBtn = document.getElementById("hms-ab-scan-btn");
+    const seekSlider = document.getElementById("hms-ab-seek-slider");
+    const timeReadout = document.getElementById("hms-ab-time-readout");
+
+    function fmtTime(sec) {
+      if (!isFinite(sec) || sec < 0) return "0:00";
+      const m = Math.floor(sec / 60);
+      const s = Math.floor(sec % 60);
+      return m + ":" + (s < 10 ? "0" : "") + s;
+    }
+
+    window.scanAndPopulateSongWavs = async function(autoPlayMaster = false) {
+      const songDir = (document.getElementById("songDirInput")?.value || "").trim();
+      const destRoot = (document.getElementById("destRootInput")?.value || "").trim();
+      if (!songDir) return;
+
+      try {
+        const url = `${API_BASE}/api/list_song_wavs?song_dir=${encodeURIComponent(songDir)}&dest_root=${encodeURIComponent(destRoot)}`;
+        const r = await fetch(url);
+        const data = await r.json();
+        if (data.status === "ok" && Array.isArray(data.tracks)) {
+          selectEl.innerHTML = "";
+          if (data.tracks.length === 0) {
+            selectEl.innerHTML = `<option value="">[No WAV files found in folder]</option>`;
+            return;
+          }
+          let masterPath = "";
+          for (const t of data.tracks) {
+            const opt = document.createElement("option");
+            opt.value = t.path;
+            opt.textContent = `${t.badge} | ${t.name} (${t.size_mb} MB)`;
+            selectEl.appendChild(opt);
+            if (!masterPath && t.category === "1_MASTER") masterPath = t.path;
+          }
+          appendLog(`[SUCCESS] Found ${data.tracks.length} auditionable audio track(s) in workspace.`, "ok");
+          if (autoPlayMaster && masterPath) {
+            selectEl.value = masterPath;
+            window.streamDiskWavInDeck(masterPath);
+          }
+        }
+      } catch (e) {}
+    };
+
+    window.streamDiskWavInDeck = function(fullPath) {
+      if (!fullPath) return;
+      ensureAudioContext();
+      const currentTime = player.currentTime || 0;
+      const wasPlaying = !player.paused;
+
+      player.src = `${API_BASE}/api/stream_wav?path=${encodeURIComponent(fullPath)}`;
+      const shortName = fullPath.split(/[\\/]/).pop();
+      document.getElementById("loadedAudioLabel").textContent = shortName;
+      document.getElementById("playPauseWavBtn").disabled = false;
+
+      if (!mediaSource) {
+        mediaSource = audioCtx.createMediaElementSource(player);
+        mediaSource.connect(analyser);
+        analyser.connect(audioCtx.destination);
+      }
+
+      player.onloadedmetadata = () => {
+        // Preserve timestamp when A/B switching between stems & Master Mix!
+        if (currentTime > 0 && currentTime < player.duration - 1) {
+          player.currentTime = currentTime;
+        }
+        if (wasPlaying || true) player.play();
+      };
+      appendLog(`[RUN] Auditioning from disk: ${shortName}`, "run");
+    };
+
+    selectEl.addEventListener("change", () => {
+      if (selectEl.value) window.streamDiskWavInDeck(selectEl.value);
+    });
+
+    scanBtn.addEventListener("click", () => window.scanAndPopulateSongWavs(false));
+
+    player.addEventListener("timeupdate", () => {
+      if (player.duration > 0) {
+        seekSlider.value = ((player.currentTime / player.duration) * 100).toFixed(2);
+        timeReadout.textContent = `${fmtTime(player.currentTime)} / ${fmtTime(player.duration)}`;
+      }
+    });
+
+    seekSlider.addEventListener("input", () => {
+      if (player.duration > 0) {
+        player.currentTime = (parseFloat(seekSlider.value) / 100.0) * player.duration;
+      }
+    });
+
+    // Automatically scan tracks on startup and whenever songDirInput changes
+    document.getElementById("songDirInput")?.addEventListener("change", () => window.scanAndPopulateSongWavs(false));
+    setTimeout(() => window.scanAndPopulateSongWavs(false), 800);
+  }
+
+  window.addEventListener("DOMContentLoaded", mountAbAuditionBar);
+})();
+</script>
+
+
+
+
+
+<!-- HMS_KEY_INSPECTOR_UI_V1 -->
+<script>
+(function() {
+  const API_BASE = window.location.origin.startsWith("http")
+    ? window.location.origin
+    : "http://127.0.0.1:8765";
+
+  window.toggleShowApiKeys = function() {
+    const mv = document.getElementById("mvsepTokenInput");
+    const gm = document.getElementById("geminiKeyInput");
+    const btn = document.getElementById("hmsShowKeysBtn");
+    if (!mv || !gm) return;
+    const nextType = mv.type === "password" ? "text" : "password";
+    mv.type = nextType;
+    gm.type = nextType;
+    if (btn) btn.textContent = nextType === "password" ? "👁 Show" : "🙈 Hide";
+  };
+
+  window.checkApiKeysLive = async function() {
+    const mv = (document.getElementById("mvsepTokenInput")?.value || "").trim();
+    const gm = (document.getElementById("geminiKeyInput")?.value || "").trim();
+    appendLog("[RUN] Checking MVSep & Gemini API Keys against ~/.mvsep_hms_config.json and Google AI Studio...", "run");
+
+    try {
+      const r = await fetch(API_BASE + "/api/verify_keys", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mvsep_api_token: mv, gemini_api_key: gm })
+      });
+      const res = await r.json();
+      const badge = document.getElementById("hmsKeyVerifyReadout");
+
+      const mvMsg = res.mvsep_present
+        ? `MVSep Token: READY (${res.mvsep_masked}, ${res.mvsep_length} chars)`
+        : `MVSep Token: MISSING`;
+      const gmMsg = res.gemini_live_ok
+        ? `Gemini Key: LIVE OK (${res.gemini_masked} -> ${res.gemini_model})`
+        : `Gemini Key: ${res.gemini_message} (${res.gemini_masked})`;
+
+      appendLog(`[SUCCESS] ${mvMsg} | ${gmMsg}`, res.mvsep_present && res.gemini_live_ok ? "ok" : "info");
+      if (badge) {
+        badge.style.display = "block";
+        badge.style.color = (res.mvsep_present && res.gemini_live_ok) ? "#4ade80" : "#facc15";
+        badge.textContent = `✓ ${mvMsg}  •  ${gmMsg}`;
+      }
+    } catch (e) {
+      appendLog("[ERROR] Key check failed (ensure launch_chrome_web_daw.py is running): " + e, "err");
+    }
+  };
+
+  window.addEventListener("DOMContentLoaded", () => {
+    const saveBtn = document.querySelector('button[onclick="saveApiCredentials()"]');
+    if (saveBtn && !document.getElementById("hmsShowKeysBtn")) {
+      const btnGroup = document.createElement("div");
+      btnGroup.style.cssText = "display:flex;gap:5px;align-items:center;";
+
+      const showBtn = document.createElement("button");
+      showBtn.id = "hmsShowKeysBtn";
+      showBtn.type = "button";
+      showBtn.textContent = "👁 Show";
+      showBtn.style.cssText = "padding:5px 8px;font-size:11px;";
+      showBtn.onclick = window.toggleShowApiKeys;
+
+      const chkBtn = document.createElement("button");
+      chkBtn.id = "hmsCheckKeysBtn";
+      chkBtn.type = "button";
+      chkBtn.textContent = "⚡ Check Keys";
+      chkBtn.className = "btn-cyan";
+      chkBtn.style.cssText = "padding:5px 9px;font-size:11px;";
+      chkBtn.onclick = window.checkApiKeysLive;
+
+      saveBtn.parentNode.insertBefore(btnGroup, saveBtn);
+      btnGroup.appendChild(showBtn);
+      btnGroup.appendChild(chkBtn);
+      btnGroup.appendChild(saveBtn);
+
+      // Add a compact status readout banner right below Gemini input
+      const gmInput = document.getElementById("geminiKeyInput");
+      if (gmInput && gmInput.parentNode) {
+        const readout = document.createElement("div");
+        readout.id = "hmsKeyVerifyReadout";
+        readout.style.cssText = "display:none;margin-top:6px;padding:6px 8px;background:#070a10;border:1px solid #1e293b;border-radius:6px;font-family:Consolas,monospace;font-size:11px;line-height:1.4;";
+        gmInput.parentNode.appendChild(readout);
+      }
+    }
+  });
+})();
+</script>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 <!-- HMS_CHROME_FULL_BRIDGE_V2 -->
 <script>
 (function() {
@@ -1560,135 +1876,1359 @@
 </script>
 
 
-<!-- HMS_AB_MASTER_AUDITION_DECK_V1 -->
+
+
+<!-- HMS_REAL_PCM_WAVEFORM_ENGINE_V1_4 -->
+<style>
+  #hms-real-wave-card {
+    margin: 10px 0 6px 0;
+    padding: 10px 12px;
+    background: linear-gradient(180deg, #0a101d 0%, #070b14 100%);
+    border: 1px solid #1e2d47;
+    border-radius: 10px;
+    box-shadow: inset 0 0 18px rgba(0, 240, 255, 0.05);
+    font-family: "Segoe UI", system-ui, sans-serif;
+  }
+  .hms-rw-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+  .hms-rw-title {
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.4px;
+    color: #00f0ff;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .hms-rw-badge {
+    font-family: Consolas, monospace;
+    font-size: 10px;
+    padding: 2px 7px;
+    border-radius: 999px;
+    background: #10243a;
+    border: 1px solid #1d4e73;
+    color: #7dd3fc;
+  }
+  .hms-rw-controls {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+  .hms-rw-btn {
+    background: #111a2c;
+    color: #e2e8f0;
+    border: 1px solid #263854;
+    border-radius: 6px;
+    padding: 4px 9px;
+    font-size: 11px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+  .hms-rw-btn:hover {
+    border-color: #00f0ff;
+    color: #00f0ff;
+  }
+  .hms-rw-btn.active {
+    background: #0d2b3e;
+    border-color: #00f0ff;
+    color: #00f0ff;
+    font-weight: 700;
+  }
+  .hms-rw-canvas-wrap {
+    position: relative;
+    width: 100%;
+    border-radius: 7px;
+    overflow: hidden;
+    background: #05080f;
+    border: 1px solid #162235;
+  }
+  #hms-live-scope-canvas {
+    display: block;
+    width: 100%;
+    height: 120px;
+  }
+  #hms-overview-wave-canvas {
+    display: block;
+    width: 100%;
+    height: 76px;
+    cursor: pointer;
+    border-top: 1px solid #162235;
+  }
+  .hms-rw-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-top: 6px;
+    font-family: Consolas, monospace;
+    font-size: 11px;
+    color: #94a3b8;
+    flex-wrap: wrap;
+  }
+  .hms-rw-stereo-wrap {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .hms-rw-meter-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    width: 170px;
+  }
+  .hms-rw-meter-row {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 10px;
+    color: #7dd3fc;
+  }
+  .hms-rw-meter-bar {
+    flex: 1;
+    height: 6px;
+    background: #0f172a;
+    border-radius: 3px;
+    overflow: hidden;
+    border: 1px solid #1e293b;
+  }
+  #hms-rw-meter-fill-l,
+  #hms-rw-meter-fill-r {
+    width: 0%;
+    height: 100%;
+    background: linear-gradient(90deg, #10b981 0%, #f59e0b 75%, #ef4444 100%);
+    transition: width 0.03s linear;
+  }
+</style>
 <script>
-(function() {
-  const API_BASE = window.location.origin.startsWith("http")
-    ? window.location.origin
-    : "http://127.0.0.1:8765";
+(function () {
+  "use strict";
 
-  function mountAbAuditionBar() {
-    if (document.getElementById("hms-ab-audition-bar")) return;
-    const deck = document.querySelector(".audition-deck");
-    if (!deck) return;
+  let fallbackCtx = null;
+  let localMediaBound = new WeakSet();
+  let decodedBuffer = null;     // AudioBuffer OR pure-JS WAV buffer object
+  let overviewPeaksL = null;    // Float32Array [min, max, ...] for Left channel
+  let overviewPeaksR = null;    // Float32Array [min, max, ...] for Right channel
+  let lastLoadedKey = "";
+  let viewMode = "dual";        // "wave", "fft", "dual"
+  let animStarted = false;
+  let activePlayer = null;
 
-    const bar = document.createElement("div");
-    bar.id = "hms-ab-audition-bar";
-    bar.style.cssText = "display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;padding-top:6px;border-top:1px solid #162032;";
-    bar.innerHTML = `
-      <div style="display:flex;align-items:center;gap:6px;flex:1;min-width:260px;">
-        <span style="font-size:11px;font-weight:700;color:#00f0ff;white-space:nowrap;">🎧 A/B Audition:</span>
-        <select id="hms-ab-track-select" style="flex:1;background:#090d16;color:#f1f5f9;border:1px solid #263248;border-radius:5px;padding:4px 8px;font-size:11px;font-family:Consolas,monospace;">
-          <option value="">-- Click '↻ Scan Folder WAVs' to load Master & Stems --</option>
-        </select>
-        <button id="hms-ab-scan-btn" type="button" style="padding:4px 9px;font-size:11px;">↻ Scan Folder WAVs</button>
-      </div>
-      <div style="display:flex;align-items:center;gap:6px;flex:1;min-width:240px;">
-        <input type="range" id="hms-ab-seek-slider" min="0" max="100" step="0.1" value="0" style="flex:1;" />
-        <span id="hms-ab-time-readout" style="font-family:Consolas,monospace;font-size:11px;color:#ffb800;min-width:82px;text-align:right;">0:00 / 0:00</span>
-      </div>
-    `;
-    deck.appendChild(bar);
+  // Test tone generator for 1-second visual verification
+  let testOsc = null;
+  let testGain = null;
 
-    const player = document.getElementById("htmlAudioPlayer");
-    const selectEl = document.getElementById("hms-ab-track-select");
-    const scanBtn = document.getElementById("hms-ab-scan-btn");
-    const seekSlider = document.getElementById("hms-ab-seek-slider");
-    const timeReadout = document.getElementById("hms-ab-time-readout");
+  // Synced legacy canvases and legacy VU meter bars
+  let legacyCanvasEntries = [];
+  let legacyMeterTargets = [];
+  let smoothPctL = 0;
+  let smoothPctR = 0;
 
-    function fmtTime(sec) {
-      if (!isFinite(sec) || sec < 0) return "0:00";
-      const m = Math.floor(sec / 60);
-      const s = Math.floor(sec % 60);
-      return m + ":" + (s < 10 ? "0" : "") + s;
+  function getAnyAudioContext() {
+    const tap = window.__HMS_TAP__;
+    if (tap && tap.ctx) {
+      if (tap.ctx.state === "suspended") tap.ctx.resume().catch(() => {});
+      return tap.ctx;
     }
-
-    window.scanAndPopulateSongWavs = async function(autoPlayMaster = false) {
-      const songDir = (document.getElementById("songDirInput")?.value || "").trim();
-      const destRoot = (document.getElementById("destRootInput")?.value || "").trim();
-      if (!songDir) return;
-
-      try {
-        const url = `${API_BASE}/api/list_song_wavs?song_dir=${encodeURIComponent(songDir)}&dest_root=${encodeURIComponent(destRoot)}`;
-        const r = await fetch(url);
-        const data = await r.json();
-        if (data.status === "ok" && Array.isArray(data.tracks)) {
-          selectEl.innerHTML = "";
-          if (data.tracks.length === 0) {
-            selectEl.innerHTML = `<option value="">[No WAV files found in folder]</option>`;
-            return;
-          }
-          let masterPath = "";
-          for (const t of data.tracks) {
-            const opt = document.createElement("option");
-            opt.value = t.path;
-            opt.textContent = `${t.badge} | ${t.name} (${t.size_mb} MB)`;
-            selectEl.appendChild(opt);
-            if (!masterPath && t.category === "1_MASTER") masterPath = t.path;
-          }
-          appendLog(`[SUCCESS] Found ${data.tracks.length} auditionable audio track(s) in workspace.`, "ok");
-          if (autoPlayMaster && masterPath) {
-            selectEl.value = masterPath;
-            window.streamDiskWavInDeck(masterPath);
-          }
-        }
-      } catch (e) {}
-    };
-
-    window.streamDiskWavInDeck = function(fullPath) {
-      if (!fullPath) return;
-      ensureAudioContext();
-      const currentTime = player.currentTime || 0;
-      const wasPlaying = !player.paused;
-
-      player.src = `${API_BASE}/api/stream_wav?path=${encodeURIComponent(fullPath)}`;
-      const shortName = fullPath.split(/[\\/]/).pop();
-      document.getElementById("loadedAudioLabel").textContent = shortName;
-      document.getElementById("playPauseWavBtn").disabled = false;
-
-      if (!mediaSource) {
-        mediaSource = audioCtx.createMediaElementSource(player);
-        mediaSource.connect(analyser);
-        analyser.connect(audioCtx.destination);
-      }
-
-      player.onloadedmetadata = () => {
-        // Preserve timestamp when A/B switching between stems & Master Mix!
-        if (currentTime > 0 && currentTime < player.duration - 1) {
-          player.currentTime = currentTime;
-        }
-        if (wasPlaying || true) player.play();
-      };
-      appendLog(`[RUN] Auditioning from disk: ${shortName}`, "run");
-    };
-
-    selectEl.addEventListener("change", () => {
-      if (selectEl.value) window.streamDiskWavInDeck(selectEl.value);
-    });
-
-    scanBtn.addEventListener("click", () => window.scanAndPopulateSongWavs(false));
-
-    player.addEventListener("timeupdate", () => {
-      if (player.duration > 0) {
-        seekSlider.value = ((player.currentTime / player.duration) * 100).toFixed(2);
-        timeReadout.textContent = `${fmtTime(player.currentTime)} / ${fmtTime(player.duration)}`;
-      }
-    });
-
-    seekSlider.addEventListener("input", () => {
-      if (player.duration > 0) {
-        player.currentTime = (parseFloat(seekSlider.value) / 100.0) * player.duration;
-      }
-    });
-
-    // Automatically scan tracks on startup and whenever songDirInput changes
-    document.getElementById("songDirInput")?.addEventListener("change", () => window.scanAndPopulateSongWavs(false));
-    setTimeout(() => window.scanAndPopulateSongWavs(false), 800);
+    if (!fallbackCtx) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      fallbackCtx = new AC();
+    }
+    if (fallbackCtx.state === "suspended") fallbackCtx.resume().catch(() => {});
+    return fallbackCtx;
   }
 
-  window.addEventListener("DOMContentLoaded", mountAbAuditionBar);
+  // ---------------------------------------------------------------------------
+  // Pure-JS Stereo PCM WAV Parser (Supports 8/16/24/32-bit PCM, 32-bit Float,
+  // AND Pedalboard/libsndfile WAVE_FORMAT_EXTENSIBLE 0xFFFE 24-bit WAVs!)
+  // ---------------------------------------------------------------------------
+  function parseWavPcmFallback(arrayBuffer) {
+    try {
+      const view = new DataView(arrayBuffer);
+      if (view.byteLength < 44) return null;
+
+      const tag = (off) =>
+        String.fromCharCode(
+          view.getUint8(off), view.getUint8(off + 1),
+          view.getUint8(off + 2), view.getUint8(off + 3)
+        );
+
+      if (tag(0) !== "RIFF" || tag(8) !== "WAVE") return null;
+
+      let offset = 12;
+      let audioFormat = 1;
+      let numChannels = 2;
+      let sampleRate = 44100;
+      let bitsPerSample = 16;
+      let dataOffset = -1;
+      let dataSize = 0;
+
+      while (offset + 8 <= view.byteLength) {
+        const chunkId = tag(offset);
+        const chunkSize = view.getUint32(offset + 4, true);
+        const bodyStart = offset + 8;
+
+        if (chunkId === "fmt " && bodyStart + 16 <= view.byteLength) {
+          audioFormat = view.getUint16(bodyStart, true);
+          numChannels = view.getUint16(bodyStart + 2, true);
+          sampleRate = view.getUint32(bodyStart + 4, true);
+          bitsPerSample = view.getUint16(bodyStart + 14, true);
+          // Unwrap WAVE_FORMAT_EXTENSIBLE (0xFFFE) SubFormat GUID (first 2 bytes = 1 PCM or 3 Float)
+          if (audioFormat === 0xFFFE && chunkSize >= 40 && bodyStart + 26 <= view.byteLength) {
+            audioFormat = view.getUint16(bodyStart + 24, true);
+          }
+        } else if (chunkId === "data") {
+          dataOffset = bodyStart;
+          dataSize = Math.min(chunkSize, view.byteLength - bodyStart);
+          break;
+        }
+        // RIFF chunks are word-aligned (odd chunk sizes have 1 padding byte)
+        offset = bodyStart + chunkSize + (chunkSize & 1);
+      }
+
+      if (dataOffset < 0 || dataSize <= 0 || numChannels < 1) return null;
+
+      const bytesPerSample = Math.max(1, bitsPerSample >> 3);
+      const frameBytes = bytesPerSample * numChannels;
+      const totalFrames = Math.floor(dataSize / frameBytes);
+      if (totalFrames <= 0) return null;
+
+      const chL = new Float32Array(totalFrames);
+      const chR = numChannels > 1 ? new Float32Array(totalFrames) : chL;
+      const bytes = new Uint8Array(arrayBuffer);
+
+      for (let i = 0; i < totalFrames; i++) {
+        const framePos = dataOffset + i * frameBytes;
+        for (let c = 0; c < Math.min(2, numChannels); c++) {
+          const p = framePos + c * bytesPerSample;
+          let sample = 0;
+          if (audioFormat === 3 && bitsPerSample === 32) {
+            sample = view.getFloat32(p, true);
+          } else if (bitsPerSample === 24) {
+            // 24-bit signed little-endian -> sign-extend from bit 23 and scale to [-1, 1]
+            let v = bytes[p] | (bytes[p + 1] << 8) | (bytes[p + 2] << 16);
+            if (v & 0x800000) v |= ~0xFFFFFF;
+            sample = v / 8388608.0;
+          } else if (bitsPerSample === 16) {
+            sample = view.getInt16(p, true) / 32768.0;
+          } else if (bitsPerSample === 32) {
+            sample = view.getInt32(p, true) / 2147483648.0;
+          } else if (bitsPerSample === 8) {
+            sample = (bytes[p] - 128) / 128.0;
+          }
+          if (c === 0) chL[i] = sample;
+          else chR[i] = sample;
+        }
+      }
+
+      return {
+        sampleRate,
+        numberOfChannels: numChannels,
+        length: totalFrames,
+        duration: totalFrames / sampleRate,
+        isPureJsWav: true,
+        bitsPerSample,
+        getChannelData: (c) => (c === 1 && numChannels > 1 ? chR : chL),
+      };
+    } catch (err) {
+      return null;
+    }
+  }
+
+  // Radix-2 real FFT on live PCM slices
+  function computeRealFftMagnitudes(samples) {
+    const N = 512;
+    const re = new Float32Array(N);
+    const im = new Float32Array(N);
+    const len = Math.min(samples.length, N);
+    for (let i = 0; i < len; i++) {
+      const w = 0.5 * (1 - Math.cos((2 * Math.PI * i) / (N - 1)));
+      re[i] = samples[i] * w;
+    }
+    let j = 0;
+    for (let i = 0; i < N; i++) {
+      if (i < j) { const tr = re[i]; re[i] = re[j]; re[j] = tr; }
+      let m = N >> 1;
+      while (m >= 1 && j >= m) { j -= m; m >>= 1; }
+      j += m;
+    }
+    for (let size = 2; size <= N; size <<= 1) {
+      const half = size >> 1;
+      const step = (-2 * Math.PI) / size;
+      for (let i = 0; i < N; i += size) {
+        for (let k = 0; k < half; k++) {
+          const angle = step * k;
+          const wr = Math.cos(angle);
+          const wi = Math.sin(angle);
+          const idx1 = i + k;
+          const idx2 = idx1 + half;
+          const tr = wr * re[idx2] - wi * im[idx2];
+          const ti = wr * im[idx2] + wi * re[idx2];
+          re[idx2] = re[idx1] - tr;
+          im[idx2] = im[idx1] - ti;
+          re[idx1] += tr;
+          im[idx1] += ti;
+        }
+      }
+    }
+    const bins = 64;
+    const out = new Float32Array(bins);
+    for (let b = 0; b < bins; b++) {
+      const start = Math.floor(Math.pow(N / 2, b / bins));
+      const end = Math.max(start + 1, Math.floor(Math.pow(N / 2, (b + 1) / bins)));
+      let sum = 0;
+      for (let k = start; k < end && k < N / 2; k++) {
+        sum += Math.hypot(re[k], im[k]);
+      }
+      const avg = sum / Math.max(1, end - start);
+      const db = 20 * Math.log10(Math.max(avg / (N * 0.25), 1e-5));
+      out[b] = Math.max(0, Math.min(1, (db + 65) / 65));
+    }
+    return out;
+  }
+
+  function buildChannelPeaks(channelData, numColumns) {
+    const blockSize = Math.max(1, Math.floor(channelData.length / numColumns));
+    const peaks = new Float32Array(numColumns * 2);
+    for (let i = 0; i < numColumns; i++) {
+      const start = i * blockSize;
+      const end = Math.min(channelData.length, start + blockSize);
+      let minV = 1.0;
+      let maxV = -1.0;
+      const stride = Math.max(1, Math.floor((end - start) / 128));
+      for (let s = start; s < end; s += stride) {
+        const v = channelData[s];
+        if (v < minV) minV = v;
+        if (v > maxV) maxV = v;
+      }
+      peaks[i * 2] = minV === 1.0 ? 0 : minV;
+      peaks[i * 2 + 1] = maxV === -1.0 ? 0 : maxV;
+    }
+    return peaks;
+  }
+
+  function applyDecodedBuffer(bufObj, labelText) {
+    if (!bufObj) return;
+    decodedBuffer = bufObj;
+    const ch0 = bufObj.getChannelData(0);
+    const ch1 = bufObj.numberOfChannels > 1 ? bufObj.getChannelData(1) : ch0;
+    overviewPeaksL = buildChannelPeaks(ch0, 900);
+    overviewPeaksR = buildChannelPeaks(ch1, 900);
+
+    const statusEl = document.getElementById("hms-rw-status");
+    if (statusEl) {
+      const srKhz = (bufObj.sampleRate / 1000).toFixed(1);
+      const engineTag = bufObj.isPureJsWav ? `Pure-JS ${bufObj.bitsPerSample}-bit WAV` : "WebAudio PCM";
+      statusEl.textContent = `${labelText} | ${bufObj.numberOfChannels}ch ${srKhz}kHz (${engineTag}, ${bufObj.duration.toFixed(1)}s)`;
+    }
+  }
+
+  async function decodeFromArrayBuffer(arrayBuf, labelText) {
+    const statusEl = document.getElementById("hms-rw-status");
+    if (statusEl) statusEl.textContent = `Decoding PCM waveform for ${labelText}...`;
+
+    // Fast path 1: Pure-JS WAV parser (instantly handles Pedalboard 24-bit WAVE_FORMAT_EXTENSIBLE!)
+    const pureWav = parseWavPcmFallback(arrayBuf);
+    if (pureWav) {
+      applyDecodedBuffer(pureWav, labelText);
+      return;
+    }
+
+    // Path 2: Browser native decodeAudioData for MP3 / FLAC / M4A / OGG
+    try {
+      const ctx = getAnyAudioContext();
+      const decoded = await ctx.decodeAudioData(arrayBuf.slice(0));
+      applyDecodedBuffer(decoded, labelText);
+    } catch (err) {
+      if (statusEl) statusEl.textContent = `Decode fallback active (${err.message || "stream-only"})`;
+    }
+  }
+
+  async function decodeAudioUrl(url, labelText) {
+    if (!url || url === lastLoadedKey) return;
+    lastLoadedKey = url;
+    const statusEl = document.getElementById("hms-rw-status");
+    try {
+      const resp = await fetch(url);
+      if (!resp.ok) {
+        if (statusEl) statusEl.textContent = `Audio HTTP ${resp.status} — using live tap`;
+        return;
+      }
+      const buf = await resp.arrayBuffer();
+      await decodeFromArrayBuffer(buf, labelText || "Loaded Track");
+    } catch (err) {
+      if (statusEl) statusEl.textContent = `Stream CORS blocked fetch — using live audio tap`;
+    }
+  }
+
+  function tryAttachPlayerToTap(player) {
+    if (!player || localMediaBound.has(player)) return;
+    localMediaBound.add(player);
+    try { player.crossOrigin = "anonymous"; } catch (e) {}
+    try {
+      const ctx = getAnyAudioContext();
+      // Connecting to ctx.destination triggers our <head> AudioNode.prototype.connect tap automatically!
+      const srcNode = ctx.createMediaElementSource(player);
+      srcNode.connect(ctx.destination);
+    } catch (e) {
+      // Expected if page already bound this <audio> tag — our <head> tap ALREADY captured it!
+    }
+  }
+
+  function resizeCanvasHiDpi(canvas) {
+    const dpr = window.devicePixelRatio || 1;
+    const rect = canvas.getBoundingClientRect();
+    const cssW = rect.width > 10 ? rect.width : (canvas.clientWidth || 420);
+    const cssH = rect.height > 10 ? rect.height : (canvas.clientHeight || 110);
+    const w = Math.max(160, Math.floor(cssW * dpr));
+    const h = Math.max(48, Math.floor(cssH * dpr));
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+    }
+    return { w, h, dpr };
+  }
+
+  function captureLegacyCanvasesAndMeters() {
+    legacyCanvasEntries = [];
+    legacyMeterTargets = [];
+
+    // Mirror onto any visible legacy <canvas> outside our card (only replace once to stop dead draw loops)
+    document.querySelectorAll("canvas").forEach((origCanvas) => {
+      if (origCanvas.closest("#hms-real-wave-card")) return;
+      if (origCanvas.dataset.hmsCloned === "1") {
+        legacyCanvasEntries.push({ canvas: origCanvas, ctx: origCanvas.getContext("2d") });
+        return;
+      }
+      const rect = origCanvas.getBoundingClientRect();
+      if (rect.width < 60 && origCanvas.width < 60) return;
+
+      const fresh = origCanvas.cloneNode(false);
+      fresh.dataset.hmsCloned = "1";
+      // Preserve visible display sizing so CSS layout never collapses
+      if (!fresh.style.width && rect.width > 0) fresh.style.width = "100%";
+      if (!fresh.style.height && rect.height > 0) fresh.style.height = `${Math.round(rect.height)}px`;
+      if (origCanvas.parentNode) {
+        origCanvas.parentNode.replaceChild(fresh, origCanvas);
+        legacyCanvasEntries.push({ canvas: fresh, ctx: fresh.getContext("2d") });
+      }
+    });
+
+    // Discover legacy Left/Right VU meter bars outside our card
+    const meterSelectors = [
+      "[id*='vu' i]", "[class*='vu-' i]", "[class*='vu_' i]",
+      "[id*='meter' i]", "[class*='meter-fill' i]", "[class*='meter-bar' i]",
+      "[id*='level' i]", "meter", "progress"
+    ].join(", ");
+
+    const seen = new Set();
+    document.querySelectorAll(meterSelectors).forEach((el) => {
+      if (el.closest("#hms-real-wave-card") || seen.has(el)) return;
+      const tag = el.tagName.toLowerCase();
+      if (tag !== "meter" && tag !== "progress" && el.children.length > 0) return;
+      if (["button", "span", "label", "input", "svg", "canvas"].includes(tag)) return;
+
+      const idCls = `${el.id || ""} ${typeof el.className === "string" ? el.className : ""}`.toLowerCase();
+      if (/label|text|title|card|wrap|container|deck|panel|value|readout/.test(idCls)) return;
+      seen.add(el);
+
+      let channel = "M";
+      if (/(^|[^a-z])(l|left|ch0|ch1)([^a-z]|$)|vu-?l|meter-?l|bar-?l/i.test(idCls)) channel = "L";
+      else if (/(^|[^a-z])(r|right|ch2)([^a-z]|$)|vu-?r|meter-?r|bar-?r/i.test(idCls)) channel = "R";
+
+      const pRect = el.parentElement ? el.parentElement.getBoundingClientRect() : el.getBoundingClientRect();
+      const isVertical = pRect.height > pRect.width * 1.15;
+      el.style.transition = "none";
+      legacyMeterTargets.push({ el, channel, isVertical, tag });
+    });
+
+    const monoBars = legacyMeterTargets.filter((m) => m.channel === "M");
+    if (monoBars.length === 2) {
+      monoBars[0].channel = "L";
+      monoBars[1].channel = "R";
+    }
+  }
+
+  function renderDualChannelScope(canvas, ctx, samplesL, samplesR, mags, mode) {
+    if (!ctx) return;
+    const { w, h, dpr } = resizeCanvasHiDpi(canvas);
+    ctx.fillStyle = "#05080f";
+    ctx.fillRect(0, 0, w, h);
+
+    // Studio graticule grid
+    ctx.strokeStyle = "rgba(30, 45, 71, 0.55)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, h * 0.25); ctx.lineTo(w, h * 0.25);
+    ctx.moveTo(0, h * 0.50); ctx.lineTo(w, h * 0.50);
+    ctx.moveTo(0, h * 0.75); ctx.lineTo(w, h * 0.75);
+    ctx.stroke();
+
+    if (!samplesL || samplesL.length === 0) {
+      // Subtle center baseline when idle
+      ctx.strokeStyle = "rgba(0, 240, 255, 0.22)";
+      ctx.beginPath();
+      ctx.moveTo(0, h * 0.5); ctx.lineTo(w, h * 0.5);
+      ctx.stroke();
+      return;
+    }
+
+    // FFT Spectrum bars
+    if ((mode === "fft" || mode === "dual") && mags) {
+      const barW = w / mags.length;
+      for (let i = 0; i < mags.length; i++) {
+        const barH = mags[i] * (h * 0.88);
+        const alpha = mode === "dual" ? 0.30 : 0.80;
+        ctx.fillStyle = `rgba(14, 165, 233, ${alpha})`;
+        ctx.fillRect(i * barW + 1, h - barH, Math.max(1, barW - 2), barH);
+      }
+    }
+
+    // Stereo Dual-Trace Real-Time Waveform (Left = Cyan, Right = Emerald)
+    if (mode === "wave" || mode === "dual") {
+      // Trigger on positive-going zero crossing of Left channel to keep wave rock-steady
+      let startIdx = 0;
+      for (let i = 1; i < Math.min(256, samplesL.length - 1); i++) {
+        if (samplesL[i - 1] <= 0 && samplesL[i] > 0) { startIdx = i; break; }
+      }
+      const drawCount = Math.max(64, samplesL.length - startIdx);
+
+      // Right channel trace (Emerald)
+      if (samplesR && samplesR.length >= startIdx + drawCount) {
+        ctx.strokeStyle = "rgba(16, 185, 129, 0.80)";
+        ctx.lineWidth = Math.max(1.2, 1.4 * dpr);
+        ctx.beginPath();
+        for (let i = 0; i < drawCount; i++) {
+          const x = (i / (drawCount - 1)) * w;
+          const y = h * 0.5 - samplesR[startIdx + i] * (h * 0.44);
+          if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+      }
+
+      // Left channel trace (Bright Cyan)
+      ctx.strokeStyle = "#00f0ff";
+      ctx.lineWidth = Math.max(1.5, 1.8 * dpr);
+      ctx.shadowColor = "rgba(0, 240, 255, 0.50)";
+      ctx.shadowBlur = 5;
+      ctx.beginPath();
+      for (let i = 0; i < drawCount; i++) {
+        const x = (i / (drawCount - 1)) * w;
+        const y = h * 0.5 - samplesL[startIdx + i] * (h * 0.44);
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+    }
+  }
+
+  function renderSplitStereoOverview(overCanvas, overCtx, progressRatio) {
+    const ov = resizeCanvasHiDpi(overCanvas);
+    overCtx.fillStyle = "#060a12";
+    overCtx.fillRect(0, 0, ov.w, ov.h);
+
+    const midL = ov.h * 0.26;
+    const midR = ov.h * 0.74;
+    const halfH = ov.h * 0.22;
+
+    // Divider line between L (top) and R (bottom) lanes
+    overCtx.strokeStyle = "#1a2940";
+    overCtx.lineWidth = 1;
+    overCtx.beginPath();
+    overCtx.moveTo(0, ov.h * 0.5); overCtx.lineTo(ov.w, ov.h * 0.5);
+    overCtx.stroke();
+
+    // Lane labels
+    overCtx.fillStyle = "rgba(125, 211, 252, 0.65)";
+    overCtx.font = `bold ${Math.round(9 * ov.dpr)}px Consolas, monospace`;
+    overCtx.textAlign = "left";
+    overCtx.fillText("L", 5 * ov.dpr, 11 * ov.dpr);
+    overCtx.fillStyle = "rgba(52, 211, 153, 0.65)";
+    overCtx.fillText("R", 5 * ov.dpr, ov.h * 0.5 + 11 * ov.dpr);
+
+    if (overviewPeaksL && overviewPeaksR) {
+      const cols = overviewPeaksL.length / 2;
+      const playheadX = progressRatio * ov.w;
+      const colW = Math.max(1, ov.w / cols);
+
+      for (let i = 0; i < cols; i++) {
+        const x = (i / cols) * ov.w;
+        const played = x <= playheadX;
+
+        // Left lane (Top)
+        const lTop = midL - overviewPeaksL[i * 2 + 1] * halfH;
+        const lBot = midL - overviewPeaksL[i * 2] * halfH;
+        overCtx.fillStyle = played ? "#00f0ff" : "#2d4c6e";
+        overCtx.fillRect(x, lTop, colW, Math.max(1.2, lBot - lTop));
+
+        // Right lane (Bottom)
+        const rTop = midR - overviewPeaksR[i * 2 + 1] * halfH;
+        const rBot = midR - overviewPeaksR[i * 2] * halfH;
+        overCtx.fillStyle = played ? "#10b981" : "#1f4e43";
+        overCtx.fillRect(x, rTop, colW, Math.max(1.2, rBot - rTop));
+      }
+
+      // Playhead cursor
+      overCtx.fillStyle = "#ffb800";
+      overCtx.fillRect(playheadX - 1, 0, Math.max(2, 2 * ov.dpr), ov.h);
+    } else {
+      overCtx.fillStyle = "#64748b";
+      overCtx.font = `${Math.round(11 * ov.dpr)}px Consolas, monospace`;
+      overCtx.textAlign = "center";
+      overCtx.fillText(
+        "Click 'Load Audio' (or select a track in A/B Audition) to populate L/R PCM waveforms",
+        ov.w * 0.5,
+        ov.h * 0.5 + 4 * ov.dpr
+      );
+    }
+  }
+
+  function updateLegacyMeters(pctL, pctR) {
+    for (const target of legacyMeterTargets) {
+      const pct = target.channel === "L" ? pctL : (target.channel === "R" ? pctR : Math.max(pctL, pctR));
+      if (target.tag === "meter" || target.tag === "progress") {
+        target.el.max = 100;
+        target.el.value = pct;
+      } else if (target.isVertical) {
+        target.el.style.height = `${pct.toFixed(1)}%`;
+      } else {
+        target.el.style.width = `${pct.toFixed(1)}%`;
+      }
+    }
+  }
+
+  function mountRealWaveformEngine() {
+    if (document.getElementById("hms-real-wave-card")) return;
+
+    const existingAudio = document.getElementById("htmlAudioPlayer") || document.querySelector("audio");
+    const targetHost =
+      document.querySelector(".audition-deck") ||
+      (existingAudio ? existingAudio.parentElement : null) ||
+      document.body;
+
+    const card = document.createElement("div");
+    card.id = "hms-real-wave-card";
+    card.innerHTML = `
+      <div class="hms-rw-header">
+        <div class="hms-rw-title">
+          <span>REAL-TIME STEREO PCM WAVEFORM (L + R)</span>
+          <span class="hms-rw-badge" id="hms-rw-source-badge">READY</span>
+        </div>
+        <div class="hms-rw-controls">
+          <button type="button" class="hms-rw-btn" id="hms-rw-mode-wave">Oscilloscope</button>
+          <button type="button" class="hms-rw-btn" id="hms-rw-mode-fft">FFT</button>
+          <button type="button" class="hms-rw-btn active" id="hms-rw-mode-dual">Dual L/R + FFT</button>
+          <label class="hms-rw-btn" style="margin:0;">
+            Load Audio
+            <input type="file" id="hms-rw-file-input" accept=".wav,.flac,.mp3,.m4a,.ogg" style="display:none;" />
+          </label>
+          <button type="button" class="hms-rw-btn" id="hms-rw-play-btn">Play / Pause</button>
+          <button type="button" class="hms-rw-btn" id="hms-rw-test-btn">Test 440Hz</button>
+        </div>
+      </div>
+      <div class="hms-rw-canvas-wrap">
+        <canvas id="hms-live-scope-canvas"></canvas>
+        <canvas id="hms-overview-wave-canvas" title="Click anywhere on the L/R waveform to seek"></canvas>
+      </div>
+      <div class="hms-rw-footer">
+        <span id="hms-rw-status">Ready — load any 16/24-bit WAV or click 'Test 440Hz' to verify real-time graph</span>
+        <div class="hms-rw-stereo-wrap">
+          <span id="hms-rw-db-readout">L -inf | R -inf dBFS</span>
+          <div class="hms-rw-meter-stack">
+            <div class="hms-rw-meter-row"><span>L</span><div class="hms-rw-meter-bar"><div id="hms-rw-meter-fill-l"></div></div></div>
+            <div class="hms-rw-meter-row"><span>R</span><div class="hms-rw-meter-bar"><div id="hms-rw-meter-fill-r"></div></div></div>
+          </div>
+        </div>
+      </div>
+    `;
+    targetHost.appendChild(card);
+
+    activePlayer = existingAudio;
+    if (!activePlayer) {
+      activePlayer = document.createElement("audio");
+      activePlayer.id = "htmlAudioPlayer";
+      activePlayer.crossOrigin = "anonymous";
+      card.appendChild(activePlayer);
+    } else {
+      activePlayer.crossOrigin = "anonymous";
+    }
+
+    setTimeout(captureLegacyCanvasesAndMeters, 180);
+
+    const scopeCanvas = document.getElementById("hms-live-scope-canvas");
+    const overCanvas = document.getElementById("hms-overview-wave-canvas");
+    const scopeCtx = scopeCanvas.getContext("2d");
+    const overCtx = overCanvas.getContext("2d");
+    const badgeEl = document.getElementById("hms-rw-source-badge");
+    const dbEl = document.getElementById("hms-rw-db-readout");
+    const fillL = document.getElementById("hms-rw-meter-fill-l");
+    const fillR = document.getElementById("hms-rw-meter-fill-r");
+    const fileInput = document.getElementById("hms-rw-file-input");
+    const playBtn = document.getElementById("hms-rw-play-btn");
+    const testBtn = document.getElementById("hms-rw-test-btn");
+
+    // Pick up any AudioBuffer already decoded by page scripts via our <head> tap
+    if (window.__HMS_TAP__ && window.__HMS_TAP__.lastDecodedBuffer) {
+      applyDecodedBuffer(window.__HMS_TAP__.lastDecodedBuffer, "Loaded Track");
+    }
+    window.addEventListener("hms-pcm-decoded", (ev) => {
+      if (ev.detail && ev.detail.buffer) {
+        applyDecodedBuffer(ev.detail.buffer, "Loaded Track");
+      }
+    });
+
+    const modeButtons = {
+      wave: document.getElementById("hms-rw-mode-wave"),
+      fft: document.getElementById("hms-rw-mode-fft"),
+      dual: document.getElementById("hms-rw-mode-dual"),
+    };
+    Object.entries(modeButtons).forEach(([k, btn]) => {
+      btn.addEventListener("click", () => {
+        viewMode = k;
+        Object.values(modeButtons).forEach((b) => b.classList.remove("active"));
+        btn.classList.add("active");
+      });
+    });
+
+    // Built-in 440Hz sine test tone (verifies real-time graph + L/R meters in 1 click)
+    testBtn.addEventListener("click", () => {
+      const ctx = getAnyAudioContext();
+      if (testOsc) {
+        try { testOsc.stop(); testOsc.disconnect(); } catch (e) {}
+        testOsc = null;
+        testBtn.classList.remove("active");
+        testBtn.textContent = "Test 440Hz";
+        return;
+      }
+      testOsc = ctx.createOscillator();
+      testGain = ctx.createGain();
+      testOsc.type = "sine";
+      testOsc.frequency.value = 440;
+      testGain.gain.value = 0.22;
+      testOsc.connect(testGain);
+      testGain.connect(ctx.destination); // Captured automatically by our <head> tap!
+      testOsc.start();
+      testBtn.classList.add("active");
+      testBtn.textContent = "Stop 440Hz";
+    });
+
+    playBtn.addEventListener("click", () => {
+      getAnyAudioContext();
+      tryAttachPlayerToTap(activePlayer);
+      if (activePlayer.paused) activePlayer.play().catch(() => {});
+      else activePlayer.pause();
+    });
+
+    fileInput.addEventListener("change", async (ev) => {
+      const f = ev.target.files && ev.target.files[0];
+      if (!f) return;
+      getAnyAudioContext();
+      tryAttachPlayerToTap(activePlayer);
+      const blobUrl = URL.createObjectURL(f);
+      lastLoadedKey = blobUrl;
+      activePlayer.src = blobUrl;
+      const buf = await f.arrayBuffer();
+      await decodeFromArrayBuffer(buf, f.name);
+      activePlayer.play().catch(() => {});
+    });
+
+    // Capture ANY audio file picked anywhere on the page (including original UI file buttons!)
+    document.addEventListener("change", async (ev) => {
+      const el = ev.target;
+      if (!el || el.tagName !== "INPUT" || el.type !== "file" || el.id === "hms-rw-file-input") return;
+      const f = el.files && el.files[0];
+      if (!f || !/\.(wav|flac|mp3|m4a|ogg)$/i.test(f.name)) return;
+      const buf = await f.arrayBuffer();
+      await decodeFromArrayBuffer(buf, f.name);
+    }, true);
+
+    // Capture ANY <audio> element playing anywhere on the page (even dynamically created ones!)
+    const syncPlayerElement = (el) => {
+      if (!el || el.tagName !== "AUDIO") return;
+      activePlayer = el;
+      tryAttachPlayerToTap(el);
+      const srcUrl = el.currentSrc || el.src;
+      if (srcUrl && srcUrl !== window.location.href) {
+        const shortName = decodeURIComponent(srcUrl.split(/[\\/=?&]/).filter(Boolean).pop() || "Audio Stream");
+        decodeAudioUrl(srcUrl, shortName);
+      }
+    };
+    document.addEventListener("play", (ev) => syncPlayerElement(ev.target), true);
+    document.addEventListener("loadedmetadata", (ev) => syncPlayerElement(ev.target), true);
+
+    overCanvas.addEventListener("click", (ev) => {
+      if (!activePlayer || !activePlayer.duration || !isFinite(activePlayer.duration)) return;
+      const rect = overCanvas.getBoundingClientRect();
+      const ratio = Math.max(0, Math.min(1, (ev.clientX - rect.left) / rect.width));
+      activePlayer.currentTime = ratio * activePlayer.duration;
+    });
+
+    const tmpL = new Float32Array(2048);
+    const tmpR = new Float32Array(2048);
+    const freqBuf = new Uint8Array(256);
+
+    function computePeak(arr) {
+      let pk = 0;
+      for (let i = 0; i < arr.length; i++) {
+        const a = Math.abs(arr[i]);
+        if (a > pk) pk = a;
+      }
+      return pk;
+    }
+
+    function drawFrame() {
+      requestAnimationFrame(drawFrame);
+
+      let samplesL = null;
+      let samplesR = null;
+      let sourceLabel = "IDLE";
+      let tapAnalyser = null;
+
+      // Priority A: Our global <head> stereo Web Audio Tap (captures synth + all Web Audio playback)
+      const tap = window.__HMS_TAP__;
+      if (tap && tap.analyserL && tap.analyserR) {
+        tap.analyserL.getFloatTimeDomainData(tmpL);
+        tap.analyserR.getFloatTimeDomainData(tmpR);
+        const pkL = computePeak(tmpL.subarray(0, 1024));
+        const pkR = computePeak(tmpR.subarray(0, 1024));
+        if (Math.max(pkL, pkR) > 0.00025) {
+          samplesL = tmpL.subarray(0, 1024);
+          samplesR = pkR > 0.0001 ? tmpR.subarray(0, 1024) : samplesL;
+          tapAnalyser = tap.analyserL;
+          sourceLabel = "LIVE STEREO TAP";
+        }
+      }
+
+      // Priority B: Sample-accurate PCM slice from decodedBuffer (works even if WebView2 taints MediaElementSource!)
+      if (!samplesL && decodedBuffer && activePlayer && !activePlayer.paused) {
+        const sr = decodedBuffer.sampleRate;
+        const ch0 = decodedBuffer.getChannelData(0);
+        const ch1 = decodedBuffer.numberOfChannels > 1 ? decodedBuffer.getChannelData(1) : ch0;
+        const startSample = Math.floor(activePlayer.currentTime * sr);
+        if (startSample >= 0 && startSample < ch0.length) {
+          const sliceLen = Math.min(1024, ch0.length - startSample);
+          samplesL = ch0.subarray(startSample, startSample + sliceLen);
+          samplesR = ch1.subarray(startSample, startSample + sliceLen);
+          sourceLabel = decodedBuffer.isPureJsWav ? "24-BIT PCM SYNC" : "PCM SYNC";
+        }
+      }
+
+      if (badgeEl) {
+        const syncCount = legacyCanvasEntries.length;
+        const suffix = syncCount > 0 ? ` (${syncCount + 1} GRAPHS)` : "";
+        badgeEl.textContent = samplesL ? (sourceLabel + suffix) : (decodedBuffer ? "PAUSED" : "READY");
+      }
+
+      let peakL = 0;
+      let peakR = 0;
+      let mags = null;
+      if (samplesL && samplesR) {
+        peakL = computePeak(samplesL);
+        peakR = computePeak(samplesR);
+        if (viewMode === "fft" || viewMode === "dual") {
+          if (tapAnalyser) {
+            tapAnalyser.getByteFrequencyData(freqBuf);
+            mags = new Float32Array(64);
+            for (let b = 0; b < 64; b++) {
+              mags[b] = freqBuf[Math.min(freqBuf.length - 1, Math.floor(b * 2.2))] / 255.0;
+            }
+          } else {
+            mags = computeRealFftMagnitudes(samplesL);
+          }
+        }
+      }
+
+      const dbL = peakL > 1e-5 ? 20 * Math.log10(peakL) : -96;
+      const dbR = peakR > 1e-5 ? 20 * Math.log10(peakR) : -96;
+      const rawPctL = Math.max(0, Math.min(100, ((dbL + 60) / 60) * 100));
+      const rawPctR = Math.max(0, Math.min(100, ((dbR + 60) / 60) * 100));
+      smoothPctL = rawPctL > smoothPctL ? rawPctL : Math.max(0, smoothPctL * 0.88);
+      smoothPctR = rawPctR > smoothPctR ? rawPctR : Math.max(0, smoothPctR * 0.88);
+
+      if (dbEl) {
+        const txtL = dbL <= -90 ? "-inf" : dbL.toFixed(1);
+        const txtR = dbR <= -90 ? "-inf" : dbR.toFixed(1);
+        dbEl.textContent = `L ${txtL} | R ${txtR} dBFS`;
+      }
+      if (fillL) fillL.style.width = `${smoothPctL.toFixed(1)}%`;
+      if (fillR) fillR.style.width = `${smoothPctR.toFixed(1)}%`;
+
+      updateLegacyMeters(smoothPctL, smoothPctR);
+
+      // Draw real-time stereo L/R waveform + FFT on the primary deck canvas
+      renderDualChannelScope(scopeCanvas, scopeCtx, samplesL, samplesR, mags, viewMode);
+
+      // Mirror identical live L/R waveform + FFT onto every legacy canvas on the page!
+      for (const entry of legacyCanvasEntries) {
+        renderDualChannelScope(entry.canvas, entry.ctx, samplesL, samplesR, mags, viewMode);
+      }
+
+      // Draw split Left (top) & Right (bottom) full-track waveform overview
+      const progress =
+        activePlayer && activePlayer.duration > 0 && isFinite(activePlayer.duration)
+          ? Math.max(0, Math.min(1, activePlayer.currentTime / activePlayer.duration))
+          : 0;
+      renderSplitStereoOverview(overCanvas, overCtx, progress);
+    }
+
+    if (!animStarted) {
+      animStarted = true;
+      requestAnimationFrame(drawFrame);
+    }
+  }
+
+  if (document.readyState === "loading") {
+    window.addEventListener("DOMContentLoaded", mountRealWaveformEngine);
+  } else {
+    mountRealWaveformEngine();
+  }
 })();
 </script>
+<!-- /HMS_REAL_PCM_WAVEFORM_ENGINE_V1_4 -->
 
+<!-- HMS_FREE_TIER_MULTIPASS_UI_V1_4 -->
+<style>
+  #hms-free-tier-recipe-card {
+    margin-top: 8px;
+    padding: 10px 12px;
+    background: linear-gradient(180deg, #0b1324 0%, #070d19 100%);
+    border: 1px solid #1e3a5f;
+    border-radius: 8px;
+    font-family: "Segoe UI", system-ui, sans-serif;
+    color: #e2e8f0;
+  }
+  .hms-ft-top-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-bottom: 8px;
+  }
+  .hms-ft-title-group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .hms-ft-pill {
+    font-size: 11px;
+    font-weight: 700;
+    padding: 3px 8px;
+    border-radius: 999px;
+    letter-spacing: 0.3px;
+  }
+  .hms-ft-pill.safe {
+    background: #064e3b;
+    color: #6ee7b7;
+    border: 1px solid #10b981;
+  }
+  .hms-ft-pill.pro {
+    background: #451a03;
+    color: #fcd34d;
+    border: 1px solid #f59e0b;
+  }
+  .hms-ft-toggle-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: #111c32;
+    border: 1px solid #2b456b;
+    border-radius: 6px;
+    padding: 4px 10px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    user-select: none;
+  }
+  .hms-ft-passes-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+  .hms-ft-pass-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 7px;
+    background: #0e1729;
+    border: 1px solid #1f324f;
+    border-radius: 6px;
+    padding: 7px 9px;
+    font-size: 11px;
+    cursor: pointer;
+  }
+  .hms-ft-pass-item:hover {
+    border-color: #38bdf8;
+  }
+  .hms-ft-pass-title {
+    font-weight: 700;
+    color: #7dd3fc;
+    display: block;
+  }
+  .hms-ft-pass-sub {
+    color: #94a3b8;
+    font-size: 10px;
+  }
+  .hms-ft-actions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .hms-ft-btn-run {
+    background: #0284c7;
+    color: #fff;
+    border: none;
+    border-radius: 5px;
+    padding: 6px 14px;
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+  .hms-ft-btn-run:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  .hms-ft-btn-cancel {
+    background: #7f1d1d;
+    color: #fecaca;
+    border: none;
+    border-radius: 5px;
+    padding: 6px 10px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .hms-ft-btn-cancel:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+  #hms-ft-queue-badge {
+    font-family: Consolas, monospace;
+    font-size: 11px;
+    color: #38bdf8;
+  }
+  #hms-ft-log-box {
+    margin-top: 8px;
+    background: #050811;
+    border: 1px solid #1a2942;
+    border-radius: 5px;
+    padding: 6px 9px;
+    font-family: Consolas, monospace;
+    font-size: 11px;
+    max-height: 110px;
+    overflow-y: auto;
+    color: #94a3b8;
+  }
+</style>
+<script>
+(function () {
+  "use strict";
+
+  const API_BASE = "http://127.0.0.1:8765";
+  const PREMIUM_MODELS = new Set(["26", "28", "30"]);
+  const PREMIUM_FORMATS = new Set(["4", "5"]);
+  const STORAGE_KEY = "hms_mvsep_free_tier_safe";
+  let mpPollTimer = null;
+
+  function isFreeTierSafeEnabled() {
+    const cb = document.getElementById("hms-free-tier-safe-cb");
+    if (cb) return cb.checked;
+    const saved = localStorage.getItem(STORAGE_KEY);
+    return saved === null ? true : saved === "true";
+  }
+
+  function applyFreeTierDropdownLocks(freeSafe) {
+    const modelSel = document.getElementById("hms-mvsep-model-select");
+    const fmtSel = document.getElementById("hms-mvsep-format-select");
+    const pill = document.getElementById("hms-ft-mode-pill");
+
+    if (pill) {
+      pill.className = "hms-ft-pill " + (freeSafe ? "safe" : "pro");
+      pill.textContent = freeSafe
+        ? "FREE-TIER SAFE: ON (No Ensembles / 16-Bit Max / 1 Job Queue)"
+        : "FREE-TIER SAFE: OFF (Premium Credits Mode)";
+    }
+
+    if (modelSel) {
+      Array.from(modelSel.options).forEach((opt) => {
+        if (!opt.dataset.origLabel) opt.dataset.origLabel = opt.textContent;
+        const isPrem = PREMIUM_MODELS.has(String(opt.value));
+        opt.disabled = freeSafe && isPrem;
+        opt.textContent = freeSafe && isPrem
+          ? `[PREMIUM BLOCKED] ${opt.dataset.origLabel}`
+          : opt.dataset.origLabel;
+      });
+      if (freeSafe && PREMIUM_MODELS.has(String(modelSel.value))) {
+        modelSel.value = "63"; // Snap safely to BS Roformer SW 6-Stems
+      }
+    }
+
+    if (fmtSel) {
+      Array.from(fmtSel.options).forEach((opt) => {
+        if (!opt.dataset.origLabel) opt.dataset.origLabel = opt.textContent;
+        const isPrem = PREMIUM_FORMATS.has(String(opt.value));
+        opt.disabled = freeSafe && isPrem;
+        opt.textContent = freeSafe && isPrem
+          ? `[PREMIUM BLOCKED] ${opt.dataset.origLabel}`
+          : opt.dataset.origLabel;
+      });
+      if (freeSafe && PREMIUM_FORMATS.has(String(fmtSel.value))) {
+        fmtSel.value = "1"; // Snap safely to WAV 16-bit
+      }
+    }
+  }
+
+  async function callMultipassApi(pyMethod, restPath, method, payload) {
+    if (window.pywebview && window.pywebview.api && typeof window.pywebview.api[pyMethod] === "function") {
+      return payload !== undefined
+        ? await window.pywebview.api[pyMethod](payload)
+        : await window.pywebview.api[pyMethod]();
+    }
+    const opts = { method: method || "GET", headers: { "Content-Type": "application/json" } };
+    if (method === "POST") opts.body = JSON.stringify(payload || {});
+    const resp = await fetch(API_BASE + restPath, opts);
+    return await resp.json();
+  }
+
+  function renderMultipassLogs(lines) {
+    const box = document.getElementById("hms-ft-log-box");
+    if (!box || !Array.isArray(lines) || !lines.length) return;
+    box.innerHTML = lines.map((line) => {
+      const safe = String(line).replace(/</g, "&lt;");
+      let color = "#94a3b8";
+      if (safe.includes("[SUCCESS]")) color = "#22c55e";
+      else if (safe.includes("[ERROR]")) color = "#ef4444";
+      else if (safe.includes("[RUN]")) color = "#38bdf8";
+      return `<div style="color:${color};">${safe}</div>`;
+    }).join("");
+    box.scrollTop = box.scrollHeight;
+  }
+
+  function syncWorkspaceFolder(folderPath) {
+    if (!folderPath) return;
+    const direct = document.getElementById("songDirInput");
+    if (direct && direct.value !== folderPath) {
+      direct.value = folderPath;
+      direct.dispatchEvent(new Event("input", { bubbles: true }));
+      direct.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+  }
+
+  function getSavedTokenFromPage() {
+    const el1 = document.getElementById("mvsepTokenInput");
+    const el2 = document.getElementById("hms-mvsep-key-input");
+    return (el1 && el1.value.trim()) || (el2 && el2.value.trim()) || localStorage.getItem("hms_mvsep_api_token") || "";
+  }
+
+  function mountFreeTierRecipeCard() {
+    if (document.getElementById("hms-free-tier-recipe-card")) {
+      applyFreeTierDropdownLocks(isFreeTierSafeEnabled());
+      return;
+    }
+
+    const splitterDeck = document.getElementById("hms-mvsep-splitter-deck");
+    const host = splitterDeck || document.body;
+
+    const card = document.createElement("div");
+    card.id = "hms-free-tier-recipe-card";
+    card.innerHTML = `
+      <div class="hms-ft-top-row">
+        <div class="hms-ft-title-group">
+          <strong style="font-size:12px;color:#38bdf8;">MULTI-PASS SEQUENTIAL RECIPE CARD (1 JOB AT A TIME)</strong>
+          <span id="hms-ft-mode-pill" class="hms-ft-pill safe">FREE-TIER SAFE: ON</span>
+        </div>
+        <label class="hms-ft-toggle-label" title="Blocks Premium Ensemble models (26/28/30), blocks 24/32-bit formats (4/5), and enforces 1 concurrent cloud job">
+          <input type="checkbox" id="hms-free-tier-safe-cb" checked />
+          Free-Tier Safe Mode (Recommended)
+        </label>
+      </div>
+
+      <div class="hms-ft-passes-grid">
+        <label class="hms-ft-pass-item">
+          <input type="checkbox" class="hms-ft-pass-cb" value="pass1_vocals" checked />
+          <div>
+            <span class="hms-ft-pass-title">Pass 1: Vocals</span>
+            <span class="hms-ft-pass-sub">BS Roformer 124-Band Standalone (sep=40, opt1=171) — keeps Vocals</span>
+          </div>
+        </label>
+        <label class="hms-ft-pass-item">
+          <input type="checkbox" class="hms-ft-pass-cb" value="pass2_music" checked />
+          <div>
+            <span class="hms-ft-pass-title">Pass 2: Music</span>
+            <span class="hms-ft-pass-sub">BS Roformer SW 6-Stems (sep=63) — keeps Guitar, Piano, Other</span>
+          </div>
+        </label>
+        <label class="hms-ft-pass-item">
+          <input type="checkbox" class="hms-ft-pass-cb" value="pass3_rhythm" checked />
+          <div>
+            <span class="hms-ft-pass-title">Pass 3: Rhythm</span>
+            <span class="hms-ft-pass-sub">Demucs4 HT ft (sep=20, opt1=0) — keeps Drums &amp; Bass</span>
+          </div>
+        </label>
+        <label class="hms-ft-pass-item">
+          <input type="checkbox" class="hms-ft-pass-cb" value="pass4_drumsep" />
+          <div>
+            <span class="hms-ft-pass-title">Pass 4 (Optional): DrumSep</span>
+            <span class="hms-ft-pass-sub">DrumSep Standalone (sep=37) — auto-feeds isolated Drums WAV</span>
+          </div>
+        </label>
+      </div>
+
+      <div class="hms-ft-actions">
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+          <button type="button" id="hms-ft-run-multipass-btn" class="hms-ft-btn-run">Run Sequential Multi-Pass Queue</button>
+          <button type="button" id="hms-ft-cancel-multipass-btn" class="hms-ft-btn-cancel" disabled>Cancel Queue</button>
+          <label style="font-size:11px;color:#cbd5e1;display:inline-flex;align-items:center;gap:5px;cursor:pointer;">
+            <input type="checkbox" id="hms-ft-autoclean-cb" checked />
+            Auto-Clean + 24-Bit Master After Final Pass
+          </label>
+        </div>
+        <span id="hms-ft-queue-badge">Queue: Idle (Max 1 Concurrent Job)</span>
+      </div>
+
+      <div id="hms-ft-log-box">
+        [READY] Pick a song in "Browse Song" above, choose your passes, and run sequentially with duplicate stems isolated automatically.
+      </div>
+    `;
+
+    if (splitterDeck) {
+      splitterDeck.appendChild(card);
+    } else {
+      host.prepend(card);
+    }
+
+    const safeCb = document.getElementById("hms-free-tier-safe-cb");
+    const runBtn = document.getElementById("hms-ft-run-multipass-btn");
+    const cancelBtn = document.getElementById("hms-ft-cancel-multipass-btn");
+    const badge = document.getElementById("hms-ft-queue-badge");
+
+    // Restore persisted preference (defaults to Free-Tier Safe ON)
+    const savedPref = localStorage.getItem(STORAGE_KEY);
+    safeCb.checked = savedPref === null ? true : savedPref === "true";
+    applyFreeTierDropdownLocks(safeCb.checked);
+
+    safeCb.addEventListener("change", () => {
+      localStorage.setItem(STORAGE_KEY, String(safeCb.checked));
+      applyFreeTierDropdownLocks(safeCb.checked);
+    });
+
+    runBtn.addEventListener("click", async () => {
+      let songPathEl = document.getElementById("hms-mvsep-song-path");
+      let filePath = songPathEl ? songPathEl.value.trim() : "";
+
+      // If no song selected yet, trigger native file picker automatically
+      if (!filePath) {
+        try {
+          const picked = await callMultipassApi("browse_song_file", "/api/browse_song", "POST", {});
+          if (picked && picked.status === "ok" && picked.file_path) {
+            filePath = picked.file_path;
+            if (songPathEl) songPathEl.value = filePath;
+          }
+        } catch (e) {}
+      }
+
+      if (!filePath) {
+        renderMultipassLogs(["[ERROR] Select a song WAV/FLAC/MP3 file first via 'Browse Song'."]);
+        return;
+      }
+
+      const passIds = Array.from(document.querySelectorAll(".hms-ft-pass-cb:checked")).map((c) => c.value);
+      if (!passIds.length) {
+        renderMultipassLogs(["[ERROR] Check at least one recipe pass to run."]);
+        return;
+      }
+
+      const fmtSel = document.getElementById("hms-mvsep-format-select");
+      let outputFmt = fmtSel ? parseInt(fmtSel.value, 10) : 1;
+      if (safeCb.checked && PREMIUM_FORMATS.has(String(outputFmt))) {
+        outputFmt = 1;
+        if (fmtSel) fmtSel.value = "1";
+      }
+
+      const payload = {
+        file_path: filePath,
+        api_token: getSavedTokenFromPage(),
+        pass_ids: passIds,
+        output_format: outputFmt,
+        free_tier_safe: safeCb.checked,
+        auto_clean: document.getElementById("hms-ft-autoclean-cb").checked,
+      };
+
+      runBtn.disabled = true;
+      cancelBtn.disabled = false;
+      badge.textContent = `Queue: Starting ${passIds.length} sequential pass(es)...`;
+
+      try {
+        const res = await callMultipassApi(
+          "start_mvsep_multipass",
+          "/api/mvsep/multipass/start",
+          "POST",
+          payload
+        );
+        if (!res || res.status !== "ok") {
+          renderMultipassLogs([`[ERROR] ${res ? res.message : "Failed starting sequential queue."}`]);
+          runBtn.disabled = false;
+          cancelBtn.disabled = true;
+          badge.textContent = "Queue: Blocked / Idle";
+          return;
+        }
+
+        if (mpPollTimer) clearInterval(mpPollTimer);
+        mpPollTimer = setInterval(async () => {
+          try {
+            const st = await callMultipassApi("get_mvsep_multipass_status", "/api/mvsep/multipass/status", "GET");
+            if (st && st.logs) renderMultipassLogs(st.logs);
+            if (st && st.song_workspace_dir) syncWorkspaceFolder(st.song_workspace_dir);
+            if (st && st.running) {
+              badge.textContent = `Pass ${st.current_pass_index}/${st.total_passes}: ${st.current_pass_label}`;
+            } else {
+              clearInterval(mpPollTimer);
+              mpPollTimer = null;
+              runBtn.disabled = false;
+              cancelBtn.disabled = true;
+              badge.textContent = st && st.error ? "Queue: Halted (Check Logs)" : "Queue: Complete";
+            }
+          } catch (pollErr) {}
+        }, 1500);
+      } catch (err) {
+        renderMultipassLogs([`[ERROR] Bridge/REST call failed: ${err}`]);
+        runBtn.disabled = false;
+        cancelBtn.disabled = true;
+        badge.textContent = "Queue: Error";
+      }
+    });
+
+    cancelBtn.addEventListener("click", async () => {
+      try {
+        await callMultipassApi("cancel_mvsep_multipass", "/api/mvsep/multipass/cancel", "POST", {});
+        badge.textContent = "Queue: Cancelling...";
+      } catch (e) {}
+    });
+  }
+
+  // Wait briefly so injected #hms-mvsep-splitter-deck mounts first, then dock cleanly inside it
+  function scheduleMount() {
+    setTimeout(mountFreeTierRecipeCard, 350);
+    setTimeout(() => applyFreeTierDropdownLocks(isFreeTierSafeEnabled()), 900);
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", scheduleMount);
+  } else {
+    scheduleMount();
+  }
+  window.addEventListener("pywebviewready", scheduleMount);
+})();
+</script>
+<!-- /HMS_FREE_TIER_MULTIPASS_UI_V1_4 -->
 </body>
 </html>
