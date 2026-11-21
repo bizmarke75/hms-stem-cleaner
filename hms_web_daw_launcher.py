@@ -1,527 +1,265 @@
+# Save as: C:\github\projects\hms-stem-cleaner\hms_web_daw_launcher.py
+# Verify Bridge : python.exe C:\github\projects\hms-stem-cleaner\hms_web_daw_launcher.py --test-bridge
+# Verify Server : python.exe C:\github\projects\hms-stem-cleaner\hms_web_daw_launcher.py --test-server
+# Launch Studio : python.exe C:\github\projects\hms-stem-cleaner\hms_web_daw_launcher.py
+
+import argparse
+import json
 import os
+import shutil
+import subprocess
 import sys
+import time
+import traceback
+import webbrowser
+from pathlib import Path
+import tkinter as tk
+from tkinter import filedialog
+import requests
+
+# Resolve frozen (--onedir) vs script runtime paths & configure %LOCALAPPDATA% WebView2 cache
 try:
     from hms_runtime_paths import resolve_hms_runtime_paths as _resolve_hms_paths
     _HMS_PATHS = _resolve_hms_paths() or {}
 except Exception:
     _HMS_PATHS = {}
 
-import json
-import os
-import re
-import subprocess
-import sys
-import threading
-import traceback
-from pathlib import Path
-from typing import Any, Dict, List, Optional
-
-import webview
-
-from hms_daw_bridge_helpers import generate_gemini_recipe_manifest, open_native_file_dialog
-from hms_mvsep_downloader import poll_and_download_mvsep_stems
-from hms_mvsep_uploader import upload_to_mvsep_streamed
-from hms_recipe_runner import (
-    _safe_folder_name,
-    execute_single_recipe_pass,
-    run_recipe_manifest,
+HMS_REPO_DIR = _HMS_PATHS.get("bundle_dir") or (
+    getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(sys.executable)))
+    if getattr(sys, "frozen", False)
+    else os.path.dirname(os.path.abspath(__file__))
 )
-from hms_vault_and_progress import (
-    get_vault_path,
-    load_api_vault,
-    push_progress_update,
-    save_api_vault,
-)
+if os.path.isdir(HMS_REPO_DIR) and HMS_REPO_DIR not in sys.path:
+    sys.path.insert(0, HMS_REPO_DIR)
 
-# Directories skipped during recursive script lookup so virtualenvs/build caches are ignored
-_IGNORED_SEARCH_DIRS = {".git", ".venv", "venv", "__pycache__", "build", "dist", "node_modules"}
+V14_HTML_NAME = "337_west_hms_unified_studio_web_daw_v1.4.html"
+LEGACY_HTML_NAME = "hms_web_daw.html"
 
 
-def find_headless_dsp_script(repo_root: Path, filename: str = "hms_headless_dsp.py") -> Optional[Path]:
+# ==============================================================================
+# COMPONENT 1: FROZEN-SAFE HTML UI ASSET RESOLVER
+# ==============================================================================
+def resolve_v1_4_ui_html(override_path=None):
+    """Locates the v1.4 Web-DAW HTML across _MEIPASS, install_dir, repo, and Downloads."""
+    if override_path and os.path.isfile(override_path):
+        return os.path.normpath(override_path)
+
+    search_dirs = [
+        _HMS_PATHS.get("bundle_dir"),
+        _HMS_PATHS.get("install_dir"),
+        HMS_REPO_DIR,
+    ]
+    for base in search_dirs:
+        if not base:
+            continue
+        for fname in (V14_HTML_NAME, LEGACY_HTML_NAME):
+            cand = os.path.join(base, fname)
+            if os.path.isfile(cand):
+                print(f"[SUCCESS] Resolved Web-DAW UI file: {cand}")
+                return cand
+
+    # Auto-recover from Downloads when running unfrozen
+    for fname in (V14_HTML_NAME, LEGACY_HTML_NAME):
+        dl = Path.home() / "Downloads" / fname
+        if dl.is_file():
+            dst = os.path.join(HMS_REPO_DIR, fname)
+            shutil.copy2(str(dl), dst)
+            print(f"[SUCCESS] Copied {fname} from Downloads -> {dst}")
+            return dst
+
+    return os.path.join(HMS_REPO_DIR, V14_HTML_NAME)
+
+
+# ==============================================================================
+# COMPONENT 2: SELF-CONTAINED PYTHON <-> JS BRIDGE (window.pywebview.api)
+# ==============================================================================
+class HMSWebDawBridge:
     """
-    Locate hms_headless_dsp.py automatically in the repo root or any subfolder (including backups).
-
-    Priority order:
-        1. Exact match in repo_root.
-        2. First match in an active subfolder (e.g., src/, scripts/).
-        3. Fallback match in a backup subfolder (e.g., 'src_backup', 'backups').
-
-    Args:
-        repo_root: Root directory of the hms-stem-cleaner repository.
-        filename: Target Python filename to discover.
-
-    Returns:
-        Optional[Path]: Resolved Path to the script, or None if not found.
+    Self-contained v1.4 bridge connecting the Web-DAW UI to HMS Stem Cleaner,
+    JSON Mix Presets, Gemini Tuner, and Free-Tier Safe MVSep Multi-Pass Queue.
     """
-    print(f"[RUN] Searching for {filename} under {repo_root}...")
-    try:
-        direct_candidate = repo_root / filename
-        if direct_candidate.is_file():
-            print(f"[SUCCESS] Found {filename} in repo root -> {direct_candidate}")
-            return direct_candidate
 
-        active_matches = []
-        backup_matches = []
-
-        for candidate in repo_root.rglob(filename):
-            if not candidate.is_file():
-                continue
-
-            rel_parts = candidate.relative_to(repo_root).parts[:-1]
-            if any(part.lower() in _IGNORED_SEARCH_DIRS for part in rel_parts):
-                continue
-
-            if any("backup" in part.lower() or "bak" in part.lower() for part in rel_parts):
-                backup_matches.append(candidate)
-            else:
-                active_matches.append(candidate)
-
-        if active_matches:
-            active_matches.sort(key=lambda p: (len(p.parts), str(p).lower()))
-            chosen = active_matches[0]
-            print(f"[SUCCESS] Auto-discovered {filename} in subfolder -> {chosen}")
-            return chosen
-
-        if backup_matches:
-            backup_matches.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-            chosen = backup_matches[0]
-            print(f"[INFO] No root copy found; using backup subfolder copy -> {chosen}")
-            return chosen
-
-        print(f"[ERROR] {filename} was not found anywhere under {repo_root}")
-        return None
-    except Exception:
-        print("[ERROR] find_headless_dsp_script() encountered an exception:")
-        print(traceback.format_exc())
-        return None
-
-
-def build_headless_dsp_command(
-    headless_script: Path,
-    payload: Dict[str, Any],
-    python_exe: Optional[str] = None,
-) -> List[str]:
-    """
-    Build the exact CLI argument list accepted by hms_headless_dsp.py:
-        [--source SOURCE] [--dest DEST] [--live] [--move] [--no-master]
-
-    Args:
-        headless_script: Resolved Path to hms_headless_dsp.py.
-        payload: Mix settings and action payload sent from the v1.4 Web DAW UI.
-        python_exe: Optional Python interpreter override (defaults to sys.executable).
-
-    Returns:
-        List[str]: Subprocess argument list safe for Windows paths containing spaces.
-    """
-    print("[RUN] Building hms_headless_dsp.py CLI command...")
-    try:
-        song_dir = str(payload.get("song_dir", "")).strip()
-        if not song_dir:
-            raise ValueError("payload['song_dir'] is required for --source.")
-
-        # Fall back to parent folder of song_dir if Dest Root was left blank in the UI
-        dest_root = str(payload.get("dest_root", "")).strip()
-        if not dest_root:
-            dest_root = str(Path(song_dir).parent)
-            print(f"[INFO] Dest Root blank; defaulting --dest to parent folder -> {dest_root}")
-
-        action = str(payload.get("action", "live_clean")).strip().lower()
-        is_dry_run = bool(payload.get("dry_run", False)) or (action == "dry_run")
-        move_raw = bool(payload.get("move_source_files", False))
-        no_master = bool(payload.get("no_master", False))
-
-        cmd: List[str] = [
-            python_exe or sys.executable,
-            str(headless_script),
-            "--source",
-            song_dir,
-            "--dest",
-            dest_root,
-        ]
-
-        # hms_headless_dsp.py runs a dry-run audit by default and requires --live for real writes
-        if not is_dry_run:
-            cmd.append("--live")
-        if move_raw:
-            cmd.append("--move")
-        if no_master:
-            cmd.append("--no-master")
-
-        print(f"[SUCCESS] Built DSP command: {cmd}")
-        return cmd
-    except Exception:
-        print("[ERROR] build_headless_dsp_command() failed:")
-        print(traceback.format_exc())
-        raise
-
-
-def _save_mix_settings_sidecar(song_path: Path, payload: Dict[str, Any]) -> Optional[Path]:
-    """
-    Persist <Song_Name>_MIX_SETTINGS.json inside song_path, stripping any trailing '_Stems' suffix
-    so hms_mix_json_manager.py and hms_headless_dsp.py locate the active 9-slider preset cleanly.
-    """
-    if not song_path.exists():
-        print(f"[INFO] Source song path does not exist yet; skipping preset sidecar write: {song_path}")
-        return None
-    try:
-        clean_song_name = re.sub(r"_stems$", "", song_path.name, flags=re.IGNORECASE) or song_path.name
-        preset_file = song_path / f"{clean_song_name}_MIX_SETTINGS.json"
-        preset_file.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-        print(f"[SUCCESS] Saved 9-slider sidecar preset -> {preset_file}")
-        return preset_file
-    except Exception:
-        print("[ERROR] Failed to write _MIX_SETTINGS.json sidecar:")
-        print(traceback.format_exc())
-        return None
-
-
-def _push_console_log(window: Any, message: str) -> None:
-    """Thread-safely forward a diagnostic line into the 337 West bottom console."""
-    print(message)
-    if window is None:
-        return
-    try:
-        js_code = f"window.hmsPushConsoleLog && window.hmsPushConsoleLog({json.dumps(str(message))});"
-        if hasattr(window, "run_js"):
-            window.run_js(js_code)
-        else:
-            window.evaluate_js(js_code)
-    except Exception:
-        print(traceback.format_exc())
-
-
-def _sync_source_dir_ui(window: Any, folder_path: str) -> None:
-    """Auto-populate the Console Source Song Dir field when MVSEP finishes downloading."""
-    if window is None:
-        return
-    try:
-        js_code = f"window.hmsSetSourceSongDir && window.hmsSetSourceSongDir({json.dumps(str(folder_path))});"
-        if hasattr(window, "run_js"):
-            window.run_js(js_code)
-        else:
-            window.evaluate_js(js_code)
-    except Exception:
-        print(traceback.format_exc())
-
-
-class WebDawApi:
-    """Unified pywebview 6.2.1 JS-to-Python API for 337 West HMS Unified Studio Suite v1.4."""
-
-    def __init__(self) -> None:
+    def __init__(self, repo_dir=HMS_REPO_DIR):
+        self.repo_dir = os.path.normpath(repo_dir)
         self._window = None
-        self._active_registry: Dict[str, Dict[str, str]] = {}
+        self.hms_app = None
+        self.json_mgr = None
+        self.gemini_tuner = None
+        self.ai_bridge = None
+        self.mp_mod = None
+        self._load_backend_modules()
 
-    def bind_window(self, window: Any) -> None:
-        self._window = window
+    def set_window(self, window_obj):
+        self._window = window_obj
 
-    # --- 1. Persistent API Vault ---
-    def save_keys(self, keys_payload: dict) -> dict:
-        return save_api_vault(keys_payload)
+    def _load_backend_modules(self):
+        print("=" * 75)
+        print(f"[RUN] Initializing Self-Contained v1.4 HMSWebDawBridge in: {self.repo_dir}")
+        print("=" * 75)
 
-    def get_keys_status(self) -> dict:
-        return load_api_vault(mask_values=True)
-
-    # --- 2. Native Windows Explorer Pickers ---
-    def browse_master_audio(self) -> dict:
-        return open_native_file_dialog(self._window, mode="audio")
-
-    def browse_output_folder(self) -> dict:
-        return open_native_file_dialog(self._window, mode="folder")
-
-    # --- 3. Gemini / Local Recipe Generator ---
-    def generate_recipe(self, audio_path: str, style_hint: str = "Auto-Detect") -> dict:
-        return generate_gemini_recipe_manifest(audio_path=audio_path, style_hint=style_hint)
-
-    # --- 4. Real FLAC-Streamed Single-Pass MVSEP Pipeline (pass_id=0) ---
-    def start_mvsep_single_pass(self, config: dict) -> dict:
-        audio_path = str(config.get("audio_path", "")).strip()
-        dest_root = str(config.get("dest_root", "")).strip()
-        sep_type = int(config.get("sep_type", 63))
-        output_format = int(config.get("output_format", 1))
-        auto_clean = bool(config.get("auto_clean", False))
-        mix_payload = config.get("mix_payload") or {}
-
-        if not audio_path or not dest_root:
-            return {"status": "error", "error": "Both audio_path and dest_root are required."}
-
-        def _single_mvsep_worker() -> None:
+        for attr, mod_name, required in (
+            ("hms_app", "hms_stem_cleaner_app", True),
+            ("json_mgr", "hms_mix_json_manager", False),
+            ("gemini_tuner", "hms_gemini_tuner", False),
+            ("ai_bridge", "hms_ai_api_bridge", False),
+            ("mp_mod", "hms_mvsep_multipass", False),
+        ):
             try:
-                vault = load_api_vault(mask_values=False)
-                token = vault.get("keys", {}).get("mvsep_api_key", "")
-                if not token:
-                    push_progress_update(
-                        self._window, 0, 0,
-                        "Missing MVSEP API key! Click 'API Vault' in the top bar and save your key first.",
-                        status="error",
-                    )
-                    return
+                setattr(self, attr, __import__(mod_name))
+                print(f"[SUCCESS] Loaded module: {mod_name}.py")
+            except Exception:
+                level = "[ERROR]" if required else "[INFO]"
+                print(f"{level} Module {mod_name}.py not loaded.")
+                if required:
+                    print(traceback.format_exc())
 
-                song_name = _safe_folder_name(Path(audio_path).stem)
-                stems_out_dir = Path(dest_root) / f"{song_name}_Stems"
-                stems_out_dir.mkdir(parents=True, exist_ok=True)
-
-                up_res = upload_to_mvsep_streamed(
-                    audio_path=audio_path,
-                    api_token=token,
-                    sep_type=sep_type,
-                    output_format=output_format,
-                    window=self._window,
-                    pass_id=0,
-                )
-                if up_res.get("status") != "ok":
-                    return
-
-                dl_res = poll_and_download_mvsep_stems(
-                    job_hash=up_res["hash"],
-                    endpoint_used=up_res["endpoint_used"],
-                    output_dir=str(stems_out_dir),
-                    window=self._window,
-                    pass_id=0,
-                )
-                if dl_res.get("status") != "ok":
-                    return
-
-                _sync_source_dir_ui(self._window, str(stems_out_dir))
-                if auto_clean:
-                    mix_payload["song_dir"] = str(stems_out_dir)
-                    mix_payload["dest_root"] = dest_root
-                    mix_payload["action"] = "live_clean"
-                    mix_payload["dry_run"] = False
-                    self.execute_stem_cleanup(mix_payload)
-            except Exception as exc:
-                print(traceback.format_exc())
-                push_progress_update(self._window, 0, 0, f"Single-pass MVSEP error: {exc}", status="error")
-
-        threading.Thread(target=_single_mvsep_worker, daemon=True).start()
-        return {"status": "started", "pass_id": 0}
-
-    # --- 5. Multi-Pass Recipe Chainer (Single Card or Full Chain) ---
-    def run_single_pass(
-        self,
-        pass_config: dict,
-        master_wav_path: str,
-        dest_root_dir: str,
-        dry_run: bool = False,
-    ) -> dict:
-        def _worker() -> None:
-            vault = load_api_vault(mask_values=False)
-            token = vault.get("keys", {}).get("mvsep_api_key", "")
-            song_out_dir = Path(dest_root_dir) / _safe_folder_name(Path(master_wav_path).stem)
-            song_out_dir.mkdir(parents=True, exist_ok=True)
-            execute_single_recipe_pass(
-                pass_config=pass_config,
-                master_wav_path=master_wav_path,
-                song_out_dir=song_out_dir,
-                stem_registry=self._active_registry,
-                api_token=token,
-                window=self._window,
-                dry_run=dry_run,
-            )
-
-        threading.Thread(target=_worker, daemon=True).start()
-        return {"status": "started", "pass_id": pass_config.get("pass_id")}
-
-    def run_all_passes(
-        self,
-        recipe_data: dict,
-        master_wav_path: str,
-        dest_root_dir: str,
-        dry_run: bool = False,
-    ) -> dict:
-        def _chain_worker() -> None:
-            res = run_recipe_manifest(
-                recipe_data=recipe_data,
-                master_wav_path=master_wav_path,
-                dest_root_dir=dest_root_dir,
-                window=self._window,
-                dry_run=dry_run,
-            )
-            if res.get("status") == "ok":
-                self._active_registry = res.get("registry", {})
-                if res.get("song_out_dir"):
-                    _sync_source_dir_ui(self._window, res["song_out_dir"])
-
-        threading.Thread(target=_chain_worker, daemon=True).start()
-        return {"status": "started", "total_passes": len(recipe_data.get("passes", []))}
-
-    # --- 6. Tab 1 Console 9-Slider Headless DSP Bridge ---
-    def execute_stem_cleanup(self, payload: dict) -> dict:
-        song_dir = str(payload.get("song_dir", "")).strip()
-        action = str(payload.get("action", "live_clean"))
-
-        if not song_dir:
-            return {"status": "error", "error": "Select a Source Song Dir first."}
-
-        def _dsp_worker() -> None:
+    def _read_config(self):
+        cfg_path = Path.home() / ".mvsep_hms_config.json"
+        if cfg_path.is_file():
             try:
-                repo_root = Path(__file__).resolve().parent
-                headless_script = find_headless_dsp_script(repo_root)
-                song_path = Path(song_dir)
-
-                # Persist active 9-slider preset as <Song_Name>_MIX_SETTINGS.json inside song_dir
-                preset_file = _save_mix_settings_sidecar(song_path, payload)
-                if preset_file:
-                    _push_console_log(self._window, f"[SUCCESS] Saved active 9-slider config -> {preset_file}")
-
-                if headless_script is None:
-                    _push_console_log(
-                        self._window,
-                        f"[ERROR] hms_headless_dsp.py not found anywhere under {repo_root}; saved preset JSON only.",
-                    )
-                    return
-
-                _push_console_log(self._window, f"[INFO] Resolved DSP engine -> {headless_script}")
-
-                # Expose both repo_root and script's subfolder on PYTHONPATH so sibling module imports resolve cleanly
-                sub_env = os.environ.copy()
-                extra_paths = [str(repo_root), str(headless_script.parent)]
-                existing_pypath = sub_env.get("PYTHONPATH", "")
-                sub_env["PYTHONPATH"] = os.pathsep.join(
-                    extra_paths + ([existing_pypath] if existing_pypath else [])
-                )
-
-                # Use the exact argparse flags supported by hms_headless_dsp.py
-                cmd = build_headless_dsp_command(headless_script, payload)
-                _push_console_log(self._window, f"[RUN] Executing ({action}): {' '.join(cmd)}")
-
-                proc = subprocess.run(
-                    cmd,
-                    cwd=str(repo_root),
-                    env=sub_env,
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                )
-                for line in (proc.stdout or "").splitlines():
-                    if line.strip():
-                        _push_console_log(self._window, line)
-                if proc.returncode != 0:
-                    err_text = (proc.stderr or "").strip()
-                    _push_console_log(self._window, f"[ERROR] hms_headless_dsp.py exited {proc.returncode}: {err_text}")
-                else:
-                    _push_console_log(self._window, f"[SUCCESS] Console action '{action}' completed cleanly.")
-            except Exception as exc:
-                print(traceback.format_exc())
-                _push_console_log(self._window, f"[ERROR] DSP worker crashed: {exc}")
-
-        threading.Thread(target=_dsp_worker, daemon=True).start()
-        return {"status": "started", "action": action, "song_dir": song_dir}
-
-
-def launch_web_daw() -> None:
-    api = WebDawApi()
-    repo_root = Path(__file__).resolve().parent
-    ui_html = repo_root / "337_west_hms_unified_studio_web_daw_v1.4.html"
-    if not ui_html.exists():
-        raise FileNotFoundError(
-            f"Missing UI file: {ui_html}\n"
-            "Drop 337_west_hms_unified_studio_web_daw_v1.4.html into your hms-stem-cleaner repo root."
-        )
-
-    storage_dir = get_vault_path().parent / "webview_storage"
-    storage_dir.mkdir(parents=True, exist_ok=True)
-
-    window = webview.create_window(
-        title="337 WEST // HMS UNIFIED STUDIO SUITE (v1.4 LIVE Web-DAW)",
-        url=str(ui_html),
-        js_api=api,
-        width=1480,
-        height=920,
-    )
-    api.bind_window(window)
-
-    # private_mode=False + static storage_path ensures WebView2 persists state cleanly
-    webview.start(
-        private_mode=False,
-        storage_path=str(storage_dir),
-        debug=False,
-    )
-
-
-
-
-
-
-
-
-
-
-
-
-# === HMS_MVSEP_MULTIPASS_BRIDGE_PATCH ===
-def _attach_free_tier_multipass_to_bridge():
-    import json as _json
-    import traceback as _tb
-    from pathlib import Path as _Path
-    import hms_mvsep_multipass as _mp
-
-    # Auto-discover the active JS API bridge class defined in this launcher module
-    _bridge_method_hints = {
-        "run_clean", "get_status", "browse_folder", "browse_song_file",
-        "start_mvsep_separation", "save_credentials", "load_credentials",
-        "list_song_wavs", "run_action", "clean_stems", "get_config",
-    }
-    _candidates = []
-    for _name, _obj in list(globals().items()):
-        if isinstance(_obj, type) and getattr(_obj, "__module__", None) == __name__:
-            _attrs = set(dir(_obj))
-            _score = len(_attrs & _bridge_method_hints) * 10
-            if any(k in _name.lower() for k in ("bridge", "api", "daw", "studio")):
-                _score += 5
-            _candidates.append((_score, _name, _obj))
-
-    if _candidates:
-        _candidates.sort(key=lambda item: item[0], reverse=True)
-        _target_cls = _candidates[0][2]
-        print(f"[INFO] Multipass hook attached to bridge class: {_target_cls.__name__}")
-    else:
-        class HMSWebDawBridge:
-            pass
-        _target_cls = HMSWebDawBridge
-        print("[INFO] No bridge class found in launcher; created fallback HMSWebDawBridge.")
-
-    # Alias HMSWebDawBridge so REST/Chrome bridges and verification scripts always resolve it
-    globals().setdefault("HMSWebDawBridge", _target_cls)
-
-    def _resolve_saved_mvsep_token(payload_token=""):
-        tok = str(payload_token or "").strip()
-        if tok:
-            return tok
-        cfg_file = _Path.home() / ".mvsep_hms_config.json"
-        if cfg_file.is_file():
-            try:
-                with open(cfg_file, "r", encoding="utf-8") as cf:
-                    cfg = _json.load(cf)
-                return str(cfg.get("mvsep_api_token") or cfg.get("mvsep_token") or "").strip()
+                with open(cfg_path, "r", encoding="utf-8") as f:
+                    return json.load(f)
             except Exception:
                 pass
-        return ""
+        return {}
 
+    def get_status(self):
+        """Returns backend engine health, VST3 availability, and saved API key flags."""
+        try:
+            creds = self._read_config()
+            vst3_map = {}
+            if self.hms_app and hasattr(self.hms_app, "resolve_vst3_binary_path"):
+                vst3_map = self.hms_app.resolve_vst3_binary_path()
+            mv_tok = str(creds.get("mvsep_api_token") or creds.get("mvsep_token") or "").strip()
+            gm_key = str(creds.get("gemini_api_key") or "").strip()
+            return {
+                "status": "ok",
+                "engine_loaded": self.hms_app is not None,
+                "multipass_loaded": self.mp_mod is not None,
+                "vst3_status": {k: bool(v) for k, v in vst3_map.items()},
+                "has_mvsep_token": bool(mv_tok),
+                "has_gemini_key": bool(gm_key),
+                "mvsep_api_token": mv_tok,
+                "gemini_api_key": gm_key,
+            }
+        except Exception:
+            print(traceback.format_exc())
+            return {"status": "error", "message": traceback.format_exc()}
+
+    def save_credentials(self, mvsep_token="", gemini_key=""):
+        """Saves MVSep & Gemini keys to ~/.mvsep_hms_config.json (accepts dict or positional args)."""
+        try:
+            if isinstance(mvsep_token, dict):
+                payload = mvsep_token
+                mvsep_token = payload.get("mvsep_api_token") or payload.get("mvsep_token") or ""
+                gemini_key = payload.get("gemini_api_key") or ""
+            cfg_path = Path.home() / ".mvsep_hms_config.json"
+            existing = self._read_config()
+            if str(mvsep_token).strip():
+                existing["mvsep_api_token"] = str(mvsep_token).strip()
+                existing["mvsep_token"] = str(mvsep_token).strip()
+            if str(gemini_key).strip():
+                existing["gemini_api_key"] = str(gemini_key).strip()
+            with open(cfg_path, "w", encoding="utf-8") as f:
+                json.dump(existing, f, indent=2)
+            print(f"[SUCCESS] Saved credentials -> {cfg_path}")
+            return {"status": "ok"}
+        except Exception:
+            return {"status": "error", "message": traceback.format_exc()}
+
+    def browse_folder(self, title="Select Song Stem Folder"):
+        try:
+            root = tk.Tk()
+            root.withdraw()
+            root.attributes("-topmost", True)
+            selected = filedialog.askdirectory(title=title)
+            root.destroy()
+            if not selected:
+                return {"status": "cancelled", "path": ""}
+            norm_dir = os.path.normpath(selected)
+            saved_mix = None
+            if self.json_mgr and hasattr(self.json_mgr, "load_song_mix_json"):
+                saved_mix = self.json_mgr.load_song_mix_json(norm_dir)
+            return {"status": "ok", "path": norm_dir, "saved_mix": saved_mix}
+        except Exception:
+            return {"status": "error", "path": "", "message": traceback.format_exc()}
+
+    def browse_song_file(self):
+        try:
+            root = tk.Tk()
+            root.withdraw()
+            root.attributes("-topmost", True)
+            selected = filedialog.askopenfilename(
+                title="Select Audio File to Split with MVSep",
+                filetypes=[("Audio Files", "*.wav *.flac *.mp3 *.m4a"), ("All Files", "*.*")],
+            )
+            root.destroy()
+            if not selected:
+                return {"status": "cancelled", "file_path": ""}
+            return {"status": "ok", "file_path": os.path.normpath(selected)}
+        except Exception:
+            return {"status": "error", "file_path": "", "message": traceback.format_exc()}
+
+    def run_clean(self, payload):
+        """Executes autotune, dry_run, live, glue_only, rollback, or gemini_tune."""
+        if not self.hms_app:
+            return {"status": "error", "message": "hms_stem_cleaner_app.py is not loaded."}
+        try:
+            if isinstance(payload, str):
+                payload = json.loads(payload)
+            mode = payload.get("mode", "dry_run")
+            song_dir = str(payload.get("song_dir") or payload.get("source_dir") or "").strip()
+            dest_root = str(payload.get("dest_root") or "").strip() or None
+            vocal_gate_db = float(payload.get("vocal_gate_db", -33.0))
+            bus_weights = payload.get("bus_weights", {"Vocals": 1.08, "Rhythm": 1.04, "Music": 0.90})
+            vst_overrides = payload.get("vst_overrides", {})
+
+            if mode == "autotune":
+                return {"status": "ok", "mode": "autotune", "profile": self.hms_app.analyze_and_autotune_song(song_dir)}
+            if mode in ("dry_run", "live"):
+                summary = self.hms_app.execute_stem_cleanup(
+                    source_dir=song_dir, dest_root=dest_root, dry_run=(mode == "dry_run"),
+                    move_source_files=bool(payload.get("move_files", False)), render_master=True,
+                    vocal_gate_db=vocal_gate_db, bus_weights=bus_weights, vst_overrides=vst_overrides,
+                )
+                return {"status": "ok", "mode": mode, "summary": summary}
+            if mode == "glue_only":
+                return {"status": "ok", "mode": "glue_only", "result": self.hms_app.render_master_mixdown(dest_song_dir=song_dir, bus_weights=bus_weights)}
+            if mode == "rollback":
+                song_name = os.path.basename(os.path.normpath(song_dir))
+                ok = self.hms_app.restore_song_checkpoint(song_name)
+                return {"status": "ok" if ok else "error", "mode": "rollback", "song_name": song_name}
+            if mode == "gemini_tune" and self.gemini_tuner:
+                res = self.gemini_tuner.run_on_the_fly_gemini_mix_loop(target_path=song_dir, dest_root=dest_root)
+                return {"status": "ok", "mode": "gemini_tune", "result": res}
+            return {"status": "error", "message": f"Unsupported mode: {mode}"}
+        except Exception:
+            err = traceback.format_exc()
+            print(f"[ERROR] run_clean failed:\n{err}")
+            return {"status": "error", "message": err}
+
+    # ---- Free-Tier Safe Sequential Multi-Pass & Single-Pass MVSep Endpoints ----
     def get_mvsep_multipass_recipe(self):
+        if not self.mp_mod:
+            return {"status": "error", "message": "hms_mvsep_multipass.py not loaded."}
         return {
             "status": "ok",
-            "recipe": _mp.HMS_FREE_MULTIPASS_RECIPE,
-            "blocked_sep_types": sorted(_mp.PREMIUM_BLOCKED_SEP_TYPES),
-            "blocked_formats": sorted(_mp.PREMIUM_BLOCKED_FORMATS),
+            "recipe": self.mp_mod.HMS_FREE_MULTIPASS_RECIPE,
+            "blocked_sep_types": sorted(self.mp_mod.PREMIUM_BLOCKED_SEP_TYPES),
+            "blocked_formats": sorted(self.mp_mod.PREMIUM_BLOCKED_FORMATS),
         }
 
     def start_mvsep_multipass(self, payload=None):
+        if not self.mp_mod:
+            return {"status": "error", "message": "hms_mvsep_multipass.py not loaded."}
         try:
             if isinstance(payload, str):
-                payload = _json.loads(payload)
+                payload = json.loads(payload)
             payload = payload or {}
-
-            if hasattr(self, "_mvsep_lock") and hasattr(self, "_mvsep_state"):
-                with self._mvsep_lock:
-                    if self._mvsep_state.get("running"):
-                        return {
-                            "status": "error",
-                            "message": "MVSep Concurrency Lock: A single-pass MVSep job is already running (max 1 concurrent job).",
-                        }
-
-            api_token = _resolve_saved_mvsep_token(payload.get("api_token", ""))
-            return _mp.SHARED_MULTIPASS_RUNNER.start_multipass(
-                api_token=api_token,
+            creds = self._read_config()
+            tok = str(payload.get("api_token") or creds.get("mvsep_api_token") or creds.get("mvsep_token") or "").strip()
+            return self.mp_mod.SHARED_MULTIPASS_RUNNER.start_multipass(
+                api_token=tok,
                 song_file_path=str(payload.get("file_path") or "").strip(),
                 pass_ids=payload.get("pass_ids") or ["pass1_vocals", "pass2_music", "pass3_rhythm"],
                 output_format=int(payload.get("output_format", 1)),
@@ -530,59 +268,135 @@ def _attach_free_tier_multipass_to_bridge():
                 mix_style=str(payload.get("mix_style") or "auto"),
             )
         except Exception:
-            err = _tb.format_exc()
-            print(f"[ERROR] start_mvsep_multipass failed:\n{err}")
-            return {"status": "error", "message": err}
+            return {"status": "error", "message": traceback.format_exc()}
 
     def get_mvsep_multipass_status(self):
-        try:
-            st = _mp.SHARED_MULTIPASS_RUNNER.get_status()
-            st["status"] = "ok"
-            return st
-        except Exception:
-            return {"status": "error", "running": False, "logs": [_tb.format_exc()]}
+        if not self.mp_mod:
+            return {"status": "error", "running": False, "logs": []}
+        st = self.mp_mod.SHARED_MULTIPASS_RUNNER.get_status()
+        st["status"] = "ok"
+        return st
 
     def cancel_mvsep_multipass(self):
-        try:
-            return _mp.SHARED_MULTIPASS_RUNNER.cancel()
-        except Exception:
-            return {"status": "error", "message": _tb.format_exc()}
+        if not self.mp_mod:
+            return {"status": "error", "message": "hms_mvsep_multipass.py not loaded."}
+        return self.mp_mod.SHARED_MULTIPASS_RUNNER.cancel()
 
-    # Guard single-pass start_mvsep_separation if present on the discovered bridge class
-    _orig_single_start = getattr(_target_cls, "start_mvsep_separation", None)
-    if callable(_orig_single_start):
-        def _guarded_start_mvsep_separation(self, payload=None):
-            if isinstance(payload, str):
-                payload = _json.loads(payload)
-            payload = payload or {}
+    def start_mvsep_separation(self, payload=None):
+        """Routes single-pass requests through the same Free-Tier validator & 1-job lock."""
+        if not self.mp_mod:
+            return {"status": "error", "message": "hms_mvsep_multipass.py not loaded."}
+        if isinstance(payload, str):
+            payload = json.loads(payload)
+        payload = payload or {}
+        chk = self.mp_mod.validate_mvsep_free_tier_request(
+            sep_type=payload.get("sep_type", 63),
+            output_format=payload.get("output_format", 1),
+            file_path=str(payload.get("file_path") or "").strip() or None,
+            free_tier_safe=bool(payload.get("free_tier_safe", True)),
+        )
+        if not chk["ok"]:
+            return {"status": "error", "message": chk["reason"]}
+        return self.start_mvsep_multipass({
+            "file_path": payload.get("file_path", ""),
+            "api_token": payload.get("api_token", ""),
+            "pass_ids": ["pass2_music"],
+            "output_format": int(payload.get("output_format", 1)),
+            "free_tier_safe": bool(payload.get("free_tier_safe", True)),
+            "auto_clean": bool(payload.get("auto_clean", True)),
+        })
 
-            if _mp.SHARED_MULTIPASS_RUNNER.get_status().get("running"):
-                return {
-                    "status": "error",
-                    "message": "MVSep Concurrency Lock: Sequential Multi-Pass queue is active (max 1 concurrent job on Free Tier).",
-                }
+    def get_mvsep_job_status(self):
+        return self.get_mvsep_multipass_status()
 
-            free_safe = bool(payload.get("free_tier_safe", True))
-            chk = _mp.validate_mvsep_free_tier_request(
-                sep_type=payload.get("sep_type", 63),
-                output_format=payload.get("output_format", 1),
-                file_path=str(payload.get("file_path") or "").strip() or None,
-                free_tier_safe=free_safe,
-            )
-            if not chk["ok"]:
-                return {"status": "error", "message": chk["reason"]}
-            return _orig_single_start(self, payload)
+    def cancel_mvsep_separation(self):
+        return self.cancel_mvsep_multipass()
 
-        _target_cls.start_mvsep_separation = _guarded_start_mvsep_separation
-
-    _target_cls.get_mvsep_multipass_recipe = get_mvsep_multipass_recipe
-    _target_cls.start_mvsep_multipass = start_mvsep_multipass
-    _target_cls.get_mvsep_multipass_status = get_mvsep_multipass_status
-    _target_cls.cancel_mvsep_multipass = cancel_mvsep_multipass
+    def launch_classic_mvsep_gui(self):
+        for p in (os.path.join(self.repo_dir, "mvsep_gui.py"), r"C:\github\projects\mvsep-api-gui\mvsep_gui.py"):
+            if os.path.isfile(p):
+                subprocess.Popen([sys.executable, p], cwd=os.path.dirname(p))
+                return {"status": "ok", "launched": p}
+        return {"status": "error", "message": "mvsep_gui.py not found."}
 
 
-_attach_free_tier_multipass_to_bridge()
+# ==============================================================================
+# COMPONENT 3: LOCAL REST SERVER (:8765) & DESKTOP WINDOW LAUNCHER
+# ==============================================================================
+def ensure_local_rest_server_running(host="127.0.0.1", port=8765):
+    health_url = f"http://{host}:{port}/health"
+    try:
+        if requests.get(health_url, timeout=1.5).status_code == 200:
+            print(f"[SUCCESS] Local HMS REST API already online at {health_url}")
+            return True, None
+    except Exception:
+        pass
+    try:
+        import hms_ai_api_bridge as ai_bridge
+        srv, _ = ai_bridge.start_local_hms_api_server(host=host, port=port)
+        if srv:
+            time.sleep(0.25)
+            if requests.get(health_url, timeout=3.0).status_code == 200:
+                print(f"[SUCCESS] Started Local REST API on {health_url}")
+                return True, srv
+    except Exception:
+        print("[ERROR] Local REST API startup warning:")
+        print(traceback.format_exc())
+    return False, None
 
 
+def launch_hms_web_daw_desktop(html_path=None, width=1520, height=920):
+    ensure_local_rest_server_running(port=8765)
+    bridge = HMSWebDawBridge()
+    resolved_html = resolve_v1_4_ui_html(html_path)
+    if not os.path.isfile(resolved_html):
+        print(f"[ERROR] Missing Web-DAW UI HTML: {resolved_html}")
+        return False
+    try:
+        import webview
+        window = webview.create_window(
+            title="337 West Productions — HMS Unified Studio Suite v1.4 (Web-DAW)",
+            url=resolved_html,
+            js_api=bridge,
+            width=width,
+            height=height,
+            min_size=(1180, 740),
+            background_color="#07090e",
+        )
+        bridge.set_window(window)
+        webview.start(debug=False)
+        return True
+    except ImportError:
+        webbrowser.open(Path(resolved_html).as_uri())
+        return True
+    except Exception:
+        print("[ERROR] Failed launching Web-DAW desktop window:")
+        print(traceback.format_exc())
+        return False
+
+
+# ==============================================================================
+# ISOLATED VERIFICATION DRIVERS (--test-bridge & --test-server)
+# ==============================================================================
 if __name__ == "__main__":
-    launch_web_daw()
+    parser = argparse.ArgumentParser(description="HMS Unified Studio Suite v1.4 Desktop Launcher")
+    parser.add_argument("--test-bridge", action="store_true", help="Verify HMSWebDawBridge in isolation")
+    parser.add_argument("--test-server", action="store_true", help="Verify Local REST API (:8765)")
+    parser.add_argument("--html", type=str, default=None, help="Optional explicit HTML path")
+    args = parser.parse_args()
+
+    if args.test_bridge:
+        b = HMSWebDawBridge()
+        st = b.get_status()
+        assert st.get("status") == "ok" and st.get("engine_loaded") is True
+        blocked = b.start_mvsep_separation({"sep_type": 26, "output_format": 1, "free_tier_safe": True})
+        assert blocked.get("status") == "error" and "Free-Tier Safe Mode" in blocked.get("message", "")
+        print("[SUCCESS] v1.4 SELF-CONTAINED BRIDGE & FREE-TIER GUARDRAILS PASSED 100%!")
+    elif args.test_server:
+        ok, srv = ensure_local_rest_server_running(port=8765)
+        assert ok is True
+        if srv:
+            srv.shutdown()
+        print("[SUCCESS] LOCAL REST SERVER (:8765) VERIFICATION PASSED 100%!")
+    else:
+        launch_hms_web_daw_desktop(html_path=args.html)
