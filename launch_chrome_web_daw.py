@@ -617,7 +617,9 @@ def _verify_saved_api_keys_live(req_dict=None):
     gm_model = "none"
     gm_msg = "No Gemini key configured"
     if gm_key:
-        candidates = ["gemini-4-hydrogen", "gemini-3.8-flash", "gemini-3.5-flash-lite", "gemini-2.5-flash-lite"]
+        candidates = ["gemini-3.8-flash",
+    "gemini-3.6-flash",
+    "gemini-3.5-flash-lite", "gemini-3.1-flash-lite"]
         headers = {"x-goog-api-key": gm_key, "Content-Type": "application/json"}
         payload = {"contents": [{"parts": [{"text": "Reply with OK"}]}]}
         for m in candidates:

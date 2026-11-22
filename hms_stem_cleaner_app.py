@@ -1903,7 +1903,7 @@ def _attach_gemini_controls_to_hms_gui():
         # Build a dark-mode Gemini API Key & On-the-Fly Master WAV Tuner bar at the top
         gem_frame = tk.LabelFrame(
             self.root,
-            text=" Gemini 2.5 Flash On-the-Fly Connector (Saved Key + Live Master WAV Tuner) ",
+            text=" Gemini 3.8 Flash On-the-Fly Connector (Saved Key + Live Master WAV Tuner) ",
             bg="#151922",
             fg="#7dcfff",
             font=("Consolas", 10, "bold"),
@@ -2073,7 +2073,7 @@ def _attach_9_sliders_and_json_to_hms_gui():
             if p is not None:
                 log_pack_target = p
 
-        # Also move the Gemini 2.5 Flash bar ABOVE the log box so it isn't clipped at the bottom
+        # Also move the Gemini 3.8 Flash bar ABOVE the log box so it isn't clipped at the bottom
         for child in list(self.root.winfo_children()):
             try:
                 title_txt = str(child.cget("text")) if "text" in child.keys() else ""

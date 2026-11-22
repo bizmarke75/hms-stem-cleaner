@@ -832,6 +832,172 @@ _hms_attach_v1_4_bridge_methods()
 # === END_HMS_V1_4_BRIDGE_METHODS_PATCH ===
 
 
+
+
+# === HMS_PYWEBVIEW_STORAGE_PATH_FIX ===
+def _hms_enforce_persistent_webview_storage():
+    """
+    Wraps webview.start() so Edge WebView2 always uses persistent %LOCALAPPDATA%
+    storage (private_mode=False) instead of a throwaway Temp\tmp* folder that
+    triggers [WinError 2] deletion warnings on exit.
+    """
+    import os as _os
+    from pathlib import Path as _Path
+
+    try:
+        import webview as _wv
+    except Exception:
+        return
+
+    if getattr(_wv.start, "_hms_storage_wrapped", False):
+        return
+
+    _orig_start = _wv.start
+    _cache_dir = _Path(_os.environ.get("LOCALAPPDATA", str(_Path.home()))) / "HMS Studio Suite" / "WebView2Cache"
+    _cache_dir.mkdir(parents=True, exist_ok=True)
+    _os.environ["WEBVIEW2_USER_DATA_FOLDER"] = str(_cache_dir)
+
+    def _patched_start(*args, **kwargs):
+        # Force persistent user data folder so pywebview never creates/deletes Temp\tmp*
+        kwargs["private_mode"] = False
+        kwargs["storage_path"] = str(_cache_dir)
+        return _orig_start(*args, **kwargs)
+
+    _patched_start._hms_storage_wrapped = True
+    _patched_start._hms_cache_dir = str(_cache_dir)
+    _wv.start = _patched_start
+    print(f"[INFO] PyWebView persistent storage_path active -> {_cache_dir}")
+
+_hms_enforce_persistent_webview_storage()
+# === END_HMS_PYWEBVIEW_STORAGE_PATH_FIX ===
+
+
+
+
+# === HMS_DAW_VERIFY_API_BRIDGE_PATCH ===
+def _attach_verify_api_keys_to_bridge():
+    """Adds live verify_api_keys() directly onto HMSWebDawBridge for window.pywebview.api."""
+    if "HMSWebDawBridge" not in globals():
+        return
+
+    def verify_api_keys(self, payload=None):
+        import json as _json
+        import traceback as _tb
+        try:
+            if isinstance(payload, str):
+                payload = _json.loads(payload)
+            payload = payload or {}
+            ai_mod = self.ai_bridge
+            if ai_mod is None:
+                import hms_ai_api_bridge as ai_mod
+                self.ai_bridge = ai_mod
+            return ai_mod.verify_live_api_connections(
+                mvsep_token=payload.get("mvsep_api_token"),
+                gemini_key=payload.get("gemini_api_key"),
+            )
+        except Exception:
+            err = _tb.format_exc()
+            print(f"[ERROR] HMSWebDawBridge.verify_api_keys failed:\n{err}")
+            return {"status": "error", "gemini_ok": False, "gemini_detail": err, "mvsep_ok": False}
+
+    HMSWebDawBridge.verify_api_keys = verify_api_keys
+
+
+_attach_verify_api_keys_to_bridge()
+# === END_HMS_DAW_VERIFY_API_BRIDGE_PATCH ===
+
+
+
+
+# === HMS_LAUNCHER_EMPTY_DIR_GUARD_PATCH ===
+def _hms_validate_bridge_source_dir(raw_path):
+    """Validates source_dir on HMSWebDawBridge DSP calls before invoking Python audio engines."""
+    import os as _os
+
+    if raw_path is None:
+        return False, "No Source Song Dir selected. Click 'Browse' next to Source Song Dir first."
+
+    s = str(raw_path).strip()
+    if not s or s in (".", "..", "./", ".\\", "/", "\\") or "click browse" in s.lower():
+        return False, "No Source Song Dir selected. Click 'Browse' next to Source Song Dir first."
+
+    abs_p = _os.path.abspath(s)
+    if not _os.path.exists(abs_p):
+        return False, f"Source Song Dir does not exist: {abs_p}"
+
+    if _os.path.isdir(abs_p) and (
+        _os.path.isfile(_os.path.join(abs_p, "hms_web_daw_launcher.py"))
+        or _os.path.isfile(_os.path.join(abs_p, "HMS_Studio_Suite.exe"))
+    ):
+        return False, f"Refusing to run on the HMS application folder ({abs_p}). Pick a song stems folder instead."
+
+    return True, abs_p
+
+
+def _hms_extract_source_dir_from_call(args, kwargs):
+    """Extracts source_dir from either dict/JSON payloads or positional arguments."""
+    import json as _json
+
+    for k in ("source_dir", "song_dir", "target_path", "dir"):
+        if k in kwargs:
+            return kwargs.get(k)
+
+    if args:
+        first = args[0]
+        if isinstance(first, dict):
+            for k in ("source_dir", "song_dir", "target_path", "dir"):
+                if k in first:
+                    return first.get(k)
+            return ""
+        if isinstance(first, str):
+            st = first.strip()
+            if st.startswith("{"):
+                try:
+                    parsed = _json.loads(st)
+                    if isinstance(parsed, dict):
+                        for k in ("source_dir", "song_dir", "target_path", "dir"):
+                            if k in parsed:
+                                return parsed.get(k)
+                        return ""
+                except Exception:
+                    pass
+            # Handle (mode, source_dir, ...) signature if mode is passed first
+            if st.lower() in ("gemini_tune", "autotune", "dry_run", "live", "glue_only", "rollback"):
+                return args[1] if len(args) > 1 else ""
+            return st
+    return ""
+
+
+def _hms_install_launcher_dir_guards():
+    """Wraps HMSWebDawBridge DSP/Tune methods so empty source_dir aborts cleanly."""
+    if "HMSWebDawBridge" not in globals():
+        return
+
+    bridge_cls = globals()["HMSWebDawBridge"]
+    for meth_name in ("run_clean", "execute_stem_cleanup", "run_gemini_tune", "gemini_tune"):
+        orig_meth = getattr(bridge_cls, meth_name, None)
+        if not callable(orig_meth) or getattr(orig_meth, "_hms_dir_guarded", False):
+            continue
+
+        def _make_wrapper(_fn, _name):
+            def _wrapped(self, *args, **kwargs):
+                raw_dir = _hms_extract_source_dir_from_call(args, kwargs)
+                ok, msg = _hms_validate_bridge_source_dir(raw_dir)
+                if not ok:
+                    print(f"[ERROR] Blocked {_name}: {msg}")
+                    return {"status": "error", "message": msg, "error": msg}
+                return _fn(self, *args, **kwargs)
+
+            _wrapped._hms_dir_guarded = True
+            return _wrapped
+
+        setattr(bridge_cls, meth_name, _make_wrapper(orig_meth, meth_name))
+
+
+_hms_install_launcher_dir_guards()
+# === END_HMS_LAUNCHER_EMPTY_DIR_GUARD_PATCH ===
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="HMS Unified Studio Suite v1.4 Desktop Launcher")
     parser.add_argument("--test-bridge", action="store_true", help="Verify HMSWebDawBridge in isolation")

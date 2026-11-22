@@ -17,10 +17,10 @@ HMS_REPO_DIR = (
 )
 
 GEMINI_MODEL_CANDIDATES = [
-    "gemini-4-hydrogen",
     "gemini-3.8-flash",
+    "gemini-3.6-flash",
     "gemini-3.5-flash-lite",
-    "gemini-2.5-flash-lite",
+    "gemini-3.1-flash-lite",
 ]
 
 _CONFIG_LOCK = threading.Lock()
@@ -462,6 +462,154 @@ def _install_threadsafe_rest_browse_routes():
 
 _install_threadsafe_rest_browse_routes()
 # === /HMS_REST_BROWSE_ROUTES_PATCH ===
+
+
+
+
+# === HMS_LIVE_KEY_VERIFY_PATCH ===
+def verify_live_api_connections(mvsep_token=None, gemini_key=None, log_callback=print):
+    """
+    Performs a live verification of the saved MVSep token and Gemini API key
+    using the exact x-goog-api-key header and active model fallback chain used by the DAW.
+    """
+    import requests as _req
+    import traceback as _tb
+
+    log_callback("[RUN] Verifying live MVSep & Gemini API connections from DAW backend...")
+    try:
+        creds = load_ai_credentials(log_callback=lambda _: None)
+        mv_val = str(mvsep_token if mvsep_token is not None else (creds.get("mvsep_api_token") or creds.get("mvsep_token") or "")).strip()
+        gm_val = str(gemini_key if gemini_key is not None else creds.get("gemini_api_key", "")).strip()
+
+        # 1. Check MVSep token presence & format (avoid heavy file upload during health test)
+        mv_ok = len(mv_val) >= 12 and "PASTE" not in mv_val.upper()
+        mv_detail = (
+            f"Loaded ({mv_val[:4]}...{mv_val[-4:]}, {len(mv_val)} chars)"
+            if mv_ok
+            else ("Missing MVSep token" if not mv_val else f"Suspicious token length ({len(mv_val)} chars)")
+        )
+
+        # 2. Live Gemini API handshake across active Google AI Studio models
+        gm_ok = False
+        gm_model = ""
+        gm_detail = ""
+        if not gm_val or "YourActualKey" in gm_val or "PASTE_" in gm_val:
+            gm_detail = "Missing or placeholder Gemini key in ~/.mvsep_hms_config.json"
+        else:
+            candidates = (
+                "gemini-3.8-flash",
+    "gemini-3.6-flash",
+    "gemini-3.5-flash-lite",
+                "gemini-3.1-flash-lite",
+            )
+            payload = {"contents": [{"parts": [{"text": "Reply OK"}]}]}
+            headers = {"x-goog-api-key": gm_val, "Content-Type": "application/json"}
+            last_err = "No model responded"
+            for model in candidates:
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+                try:
+                    resp = _req.post(url, headers=headers, json=payload, timeout=15)
+                    if resp.status_code == 200:
+                        gm_ok = True
+                        gm_model = model
+                        reply_txt = (
+                            resp.json()
+                            .get("candidates", [{}])[0]
+                            .get("content", {})
+                            .get("parts", [{}])[0]
+                            .get("text", "OK")
+                            .strip()
+                        )
+                        gm_detail = f"Connected ({model}: {reply_txt[:30]})"
+                        break
+                    else:
+                        # Extract concise Google RPC reason (e.g. ACCESS_TOKEN_TYPE_UNSUPPORTED)
+                        try:
+                            err_json = resp.json().get("error", {})
+                            msg = err_json.get("message", resp.text[:160])
+                            reason = ""
+                            for d in err_json.get("details", []):
+                                if isinstance(d, dict) and d.get("reason"):
+                                    reason = f" [{d['reason']}]"
+                                    break
+                            last_err = f"HTTP {resp.status_code}{reason}: {msg}"
+                        except Exception:
+                            last_err = f"HTTP {resp.status_code}: {resp.text[:160]}"
+                        # Stop retrying other models immediately on 401 auth failure
+                        if resp.status_code == 401:
+                            break
+                except Exception as req_ex:
+                    last_err = str(req_ex)
+
+            if not gm_ok:
+                gm_detail = last_err
+
+        status = "ok" if (gm_ok and mv_ok) else ("partial" if (gm_ok or mv_ok) else "error")
+        result = {
+            "status": status,
+            "gemini_ok": gm_ok,
+            "gemini_model": gm_model,
+            "gemini_detail": gm_detail,
+            "mvsep_ok": mv_ok,
+            "mvsep_detail": mv_detail,
+        }
+        log_callback(f"[{'SUCCESS' if gm_ok else 'ERROR'}] Gemini Live Check -> {gm_detail}")
+        log_callback(f"[{'SUCCESS' if mv_ok else 'INFO'}] MVSep Token Check -> {mv_detail}")
+        return result
+    except Exception as ex:
+        log_callback("[ERROR] verify_live_api_connections failed:")
+        log_callback(_tb.format_exc())
+        return {
+            "status": "error",
+            "gemini_ok": False,
+            "gemini_model": "",
+            "gemini_detail": str(ex),
+            "mvsep_ok": False,
+            "mvsep_detail": str(ex),
+        }
+
+
+def _patch_rest_for_verify_keys():
+    """Exposes GET/POST /api/verify_keys on local 127.0.0.1:8765 REST server."""
+    if "_HMSRequestHandler" not in globals():
+        return
+    cls = globals()["_HMSRequestHandler"]
+    if getattr(cls, "_hms_verify_keys_patched", False):
+        return
+    orig_get = cls.do_GET
+    orig_post = cls.do_POST
+
+    def _get_with_verify(self):
+        if self.path.split("?")[0] == "/api/verify_keys":
+            self._send_json(200, verify_live_api_connections())
+            return
+        return orig_get(self)
+
+    def _post_with_verify(self):
+        if self.path.split("?")[0] == "/api/verify_keys":
+            import json as _json
+            try:
+                n = int(self.headers.get("Content-Length", 0))
+                req = _json.loads(self.rfile.read(n).decode("utf-8")) if n else {}
+            except Exception:
+                req = {}
+            self._send_json(
+                200,
+                verify_live_api_connections(
+                    mvsep_token=req.get("mvsep_api_token"),
+                    gemini_key=req.get("gemini_api_key"),
+                ),
+            )
+            return
+        return orig_post(self)
+
+    cls.do_GET = _get_with_verify
+    cls.do_POST = _post_with_verify
+    cls._hms_verify_keys_patched = True
+
+
+_patch_rest_for_verify_keys()
+# === END_HMS_LIVE_KEY_VERIFY_PATCH ===
 
 
 if __name__ == "__main__":

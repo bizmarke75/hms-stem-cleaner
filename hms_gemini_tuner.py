@@ -427,7 +427,7 @@ def request_gemini_live_tuning(
 ):
     """
     Sends the telemetry metrics AND the 16kHz base64 WAV audio snippet to
-    Gemini 2.5 Flash for real-time mix tuning while combining stems or
+    Gemini 3.8 Flash for real-time mix tuning while combining stems or
     auditing a rendered Master Mix WAV. Automatically falls back to local
     DSP telemetry rules if no API key is configured or offline.
     """
@@ -497,20 +497,20 @@ def request_gemini_live_tuning(
 
         url = (
             "https://generativelanguage.googleapis.com/v1beta/models/"
-            f"gemini-2.5-flash:generateContent?key={resolved_key}"
+            f"gemini-3.8-flash:generateContent?key={resolved_key}"
         )
         body = {
             "contents": [{"parts": parts}],
             "generationConfig": {"responseMimeType": "application/json"},
         }
 
-        log_callback("[RUN] Sending telemetry + inline WAV audio slice to gemini-2.5-flash...")
+        log_callback("[RUN] Sending telemetry + inline WAV audio slice to gemini-3.8-flash...")
         resp = requests.post(url, json=body, timeout=25)
         resp.raise_for_status()
         raw_json_str = resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
         ai_data = json.loads(raw_json_str)
 
-        profile["source"] = "gemini-2.5-flash"
+        profile["source"] = "gemini-3.8-flash"
         if ai_data.get("mix_style") in ("acoustic", "heavy"):
             profile["mix_style"] = ai_data["mix_style"]
 
@@ -547,7 +547,7 @@ def request_gemini_live_tuning(
             profile["suno_tags"] = str(ai_data["suno_tags"]).strip()
 
         log_callback(
-            f"[SUCCESS] Gemini 2.5 Flash Live Tuning Complete -> Style: {profile['mix_style'].upper()} | "
+            f"[SUCCESS] Gemini 3.8 Flash Live Tuning Complete -> Style: {profile['mix_style'].upper()} | "
             f"Vocals={profile['bus_weights']['Vocals']} | Rhythm={profile['bus_weights']['Rhythm']} | "
             f"Music={profile['bus_weights']['Music']} | Gate={profile['vocal_gate_db']} dB"
         )
@@ -765,6 +765,264 @@ def run_on_the_fly_gemini_mix_loop(
         return summary
 
     return summary
+
+
+
+
+# === HMS_GEMINI_EMPTY_DIR_GUARD_PATCH ===
+def _hms_validate_tuner_target_path(raw_path):
+    """
+    Blocks empty strings, '.', placeholder text, missing paths, and the HMS
+    application/repo root so os.path.normpath('') can never walk the whole app.
+    """
+    import os as _os
+
+    if raw_path is None:
+        return False, "No Source Song Dir or WAV file selected. Pick a song folder via 'Browse' first."
+
+    s = str(raw_path).strip()
+    if not s or s in (".", "..", "./", ".\\", "/", "\\") or "click browse" in s.lower():
+        return False, "No Source Song Dir selected. Click 'Browse' to pick a song stems folder first."
+
+    abs_p = _os.path.abspath(s)
+    if not _os.path.exists(abs_p):
+        return False, f"Selected Source Song Dir / WAV does not exist: {abs_p}"
+
+    # Never allow scanning the HMS repo or Program Files install directory as a song folder
+    if _os.path.isdir(abs_p) and (
+        _os.path.isfile(_os.path.join(abs_p, "hms_web_daw_launcher.py"))
+        or _os.path.isfile(_os.path.join(abs_p, "HMS_Studio_Suite.exe"))
+    ):
+        return False, f"Refusing to run Gemini Tune on the HMS app folder ({abs_p}). Pick a song folder instead."
+
+    return True, abs_p
+
+
+def _hms_install_tuner_path_guards():
+    """Wraps extract_audio_snippet_and_telemetry and run_on_the_fly_gemini_mix_loop."""
+    if "extract_audio_snippet_and_telemetry" in globals():
+        _orig_extract = globals()["extract_audio_snippet_and_telemetry"]
+        if not getattr(_orig_extract, "_hms_dir_guarded", False):
+            def _guarded_extract(target_path, *args, **kwargs):
+                log_cb = kwargs.get("log_callback", print)
+                ok, res = _hms_validate_tuner_target_path(target_path)
+                if not ok:
+                    log_cb(f"[ERROR] {res}")
+                    return {
+                        "status": "error",
+                        "error": res,
+                        "mode": "error",
+                        "song_name": "",
+                        "buses": {},
+                        "inline_audio_b64": "",
+                    }
+                return _orig_extract(res, *args, **kwargs)
+
+            _guarded_extract._hms_dir_guarded = True
+            globals()["extract_audio_snippet_and_telemetry"] = _guarded_extract
+
+    if "run_on_the_fly_gemini_mix_loop" in globals():
+        _orig_loop = globals()["run_on_the_fly_gemini_mix_loop"]
+        if not getattr(_orig_loop, "_hms_dir_guarded", False):
+            def _guarded_loop(target_path, *args, **kwargs):
+                log_cb = kwargs.get("log_callback", print)
+                ok, res = _hms_validate_tuner_target_path(target_path)
+                if not ok:
+                    log_cb(f"[ERROR] {res}")
+                    return {
+                        "status": "error",
+                        "error": res,
+                        "mode": "blocked_empty_dir",
+                        "master_wav_path": None,
+                        "reglued": False,
+                        "tuning_profile": None,
+                    }
+                return _orig_loop(res, *args, **kwargs)
+
+            _guarded_loop._hms_dir_guarded = True
+            globals()["run_on_the_fly_gemini_mix_loop"] = _guarded_loop
+
+
+_hms_install_tuner_path_guards()
+# === END_HMS_GEMINI_EMPTY_DIR_GUARD_PATCH ===
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# === HMS_GEMINI_3_8_MODEL_UPGRADE_PATCH ===
+GEMINI_MODEL_CANDIDATES = [
+    "gemini-3.8-flash",
+    "gemini-3.6-flash",
+    "gemini-3.5-flash-lite",
+    "gemini-3.1-flash-lite",
+]
+
+
+def request_gemini_live_tuning(
+    telemetry_payload,
+    current_params=None,
+    api_key="",
+    log_callback=print,
+):
+    """
+    Sends acoustic telemetry + 16 kHz inline WAV audio slice to active 2026
+    Free-Tier multimodal Gemini models (3.8 Flash -> 3.6 Flash -> 3.5 Flash-Lite
+    -> 3.1 Flash-Lite) using the official x-goog-api-key header. Never calls
+    deprecated legacy models.
+    """
+    import json as _json
+    import requests as _req
+
+    song_name = telemetry_payload.get("song_name", "Unknown_Song")
+    mode = telemetry_payload.get("mode", "stems")
+    log_callback("-" * 72)
+    log_callback(f"[RUN] Running Gemini Live Tuner (3.8/3.6/3.5 Chain) for '{song_name}' (mode={mode})...")
+
+    # 1. Always compute deterministic local baseline first
+    profile = _compute_local_baseline_profile(telemetry_payload, current_params, log_callback)
+
+    # 2. Resolve Gemini API Key (explicit arg -> ~/.mvsep_hms_config.json -> GEMINI_API_KEY env)
+    resolved_key = (api_key or "").strip() or load_or_save_gemini_key(log_callback=lambda _: None)
+    if not resolved_key or "YourActualKey" in resolved_key or "PASTE_" in resolved_key:
+        log_callback("[INFO] No valid Gemini API key configured; using verified Local HMS Acoustic Telemetry profile.")
+        for note in profile["ai_notes"]:
+            log_callback(f"[INFO]   * {note}")
+        return profile
+
+    telemetry_clean = {
+        "song_name": song_name,
+        "mode": mode,
+        "buses": telemetry_payload.get("buses", {}),
+        "current_baseline": {
+            "mix_style": profile["mix_style"],
+            "bus_weights": profile["bus_weights"],
+            "vocal_gate_db": profile["vocal_gate_db"],
+            "vst_overrides": profile["vst_overrides"],
+        },
+    }
+
+    prompt_text = (
+        "You are an expert studio mix & mastering engineer integrated into HMS Stem Cleaner.\n"
+        "Listen to the attached 16kHz audio excerpt and inspect the acoustic telemetry JSON.\n"
+        f"Telemetry & Baseline JSON: {_json.dumps(telemetry_clean)}\n\n"
+        "Tune the mix parameters on the fly so vocals sit naturally inside the band without "
+        "slapback echo or harshness, and centered acoustic guitars or solos are never hollowed out.\n"
+        "Return strictly valid JSON with this exact schema:\n"
+        "{\n"
+        '  "mix_style": "acoustic" or "heavy",\n'
+        '  "bus_weights": {"Vocals": float (0.75..1.35), "Rhythm": float (0.75..1.15), "Music": float (0.65..1.10)},\n'
+        '  "vocal_gate_db": float (-42.0..-22.0),\n'
+        '  "vst_overrides": {\n'
+        '    "mjuc_compress": float (8.0..26.0),\n'
+        '    "mjuc_makeup": float (0.5..3.5),\n'
+        '    "chow_rhythm_drive": float (0.15..0.55),\n'
+        '    "nova_music_pocket_db": float (-4.5..-1.0)\n'
+        "  },\n"
+        '  "needs_master_reglue": bool,\n'
+        '  "ai_notes": ["concise adjustment reason 1", "concise adjustment reason 2"],\n'
+        '  "suno_tags": "comma-separated Suno v6 style tags under 200 chars"\n'
+        "}"
+    )
+
+    parts = [{"text": prompt_text}]
+    audio_b64 = telemetry_payload.get("inline_audio_b64")
+    if audio_b64:
+        # Use official snake_case inline_data / mime_type schema for v1beta multimodal audio
+        parts.append({"inline_data": {"mime_type": "audio/wav", "data": audio_b64}})
+
+    headers = {
+        "x-goog-api-key": resolved_key,
+        "Content-Type": "application/json",
+    }
+    body = {
+        "contents": [{"parts": parts}],
+        "generationConfig": {"responseMimeType": "application/json"},
+    }
+
+    last_err = "All Gemini models failed"
+    for model_name in GEMINI_MODEL_CANDIDATES:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent"
+        log_callback(f"[RUN] Sending telemetry + inline WAV audio slice to {model_name}...")
+        try:
+            resp = _req.post(url, headers=headers, json=body, timeout=30)
+            if resp.status_code != 200:
+                last_err = f"{model_name} HTTP {resp.status_code}: {resp.text[:220]}"
+                log_callback(f"[INFO] {last_err}")
+                # Stop immediately on 401 auth rejection so we don't spam invalid credentials
+                if resp.status_code == 401:
+                    break
+                continue
+
+            raw_json_str = resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+            ai_data = _json.loads(raw_json_str)
+
+            # Validate & clamp every returned parameter to safe studio boundaries
+            profile["source"] = model_name
+            if ai_data.get("mix_style") in ("acoustic", "heavy"):
+                profile["mix_style"] = ai_data["mix_style"]
+
+            bw = ai_data.get("bus_weights", {})
+            if isinstance(bw, dict):
+                profile["bus_weights"]["Vocals"] = _clamp(bw.get("Vocals", profile["bus_weights"]["Vocals"]), 0.75, 1.35)
+                profile["bus_weights"]["Rhythm"] = _clamp(bw.get("Rhythm", profile["bus_weights"]["Rhythm"]), 0.75, 1.15)
+                profile["bus_weights"]["Music"] = _clamp(bw.get("Music", profile["bus_weights"]["Music"]), 0.65, 1.10)
+
+            if "vocal_gate_db" in ai_data:
+                profile["vocal_gate_db"] = _clamp(ai_data["vocal_gate_db"], -42.0, -22.0, 1)
+
+            vo = ai_data.get("vst_overrides", {})
+            if isinstance(vo, dict):
+                profile["vst_overrides"]["mjuc_compress"] = _clamp(
+                    vo.get("mjuc_compress", profile["vst_overrides"]["mjuc_compress"]), 8.0, 26.0, 1
+                )
+                profile["vst_overrides"]["mjuc_makeup"] = _clamp(
+                    vo.get("mjuc_makeup", profile["vst_overrides"]["mjuc_makeup"]), 0.5, 3.5, 1
+                )
+                profile["vst_overrides"]["chow_rhythm_drive"] = _clamp(
+                    vo.get("chow_rhythm_drive", profile["vst_overrides"]["chow_rhythm_drive"]), 0.15, 0.55, 2
+                )
+                profile["vst_overrides"]["nova_music_pocket_db"] = _clamp(
+                    vo.get("nova_music_pocket_db", profile["vst_overrides"]["nova_music_pocket_db"]), -4.5, -1.0, 1
+                )
+
+            if "needs_master_reglue" in ai_data:
+                profile["needs_master_reglue"] = bool(ai_data["needs_master_reglue"])
+            if isinstance(ai_data.get("ai_notes"), list) and ai_data["ai_notes"]:
+                profile["ai_notes"] = [str(n) for n in ai_data["ai_notes"]]
+            if ai_data.get("suno_tags"):
+                profile["suno_tags"] = str(ai_data["suno_tags"]).strip()
+
+            log_callback(
+                f"[SUCCESS] {model_name} Live Tuning Complete -> Style: {profile['mix_style'].upper()} | "
+                f"Vocals={profile['bus_weights']['Vocals']} | Rhythm={profile['bus_weights']['Rhythm']} | "
+                f"Music={profile['bus_weights']['Music']} | Gate={profile['vocal_gate_db']} dB"
+            )
+            for note in profile["ai_notes"]:
+                log_callback(f"[INFO]   [GEMINI] {note}")
+            return profile
+
+        except Exception as ex:
+            last_err = f"{model_name} error: {ex}"
+            log_callback(f"[INFO] {last_err}")
+
+    log_callback(f"[INFO] Cloud Gemini pass unavailable ({last_err}); using verified Local DSP Fallback profile.")
+    return profile
+# === END_HMS_GEMINI_3_8_MODEL_UPGRADE_PATCH ===
 
 
 if __name__ == "__main__":

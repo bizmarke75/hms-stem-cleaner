@@ -530,7 +530,7 @@
 
           <p class="text-[11px] text-slate-400 font-mono">
 
-            64-Bit Pedalboard VST3 Rack • FLAC-Streamed MVSep • Multi-Pass Recipe Chainer • Persistent Vault • Gemini 2.5
+            64-Bit Pedalboard VST3 Rack • FLAC-Streamed MVSep • Multi-Pass Recipe Chainer • Persistent Vault • Gemini 3.8
 
           </p>
 
@@ -898,7 +898,7 @@
 
             <input id="input-source-dir" type="text" placeholder="Click Browse to pick song stems directory..." class="w-full bg-transparent text-slate-200 font-mono text-xs focus:outline-none" />
 
-            <button onclick="browseNativeFolder('source')" class="studio-btn px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 font-mono text-[10px]">
+            <button onclick="browseNativeFolder('source')" class="studio-btn shrink-0 whitespace-nowrap px-2.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 font-mono text-[10px]">
 
               Browse
 
@@ -918,7 +918,7 @@
 
             <input id="input-dest-dir" type="text" placeholder="Click Browse to pick export root..." class="w-full bg-transparent text-slate-200 font-mono text-xs focus:outline-none" />
 
-            <button onclick="browseNativeFolder('dest')" class="studio-btn px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 font-mono text-[10px]">
+            <button onclick="browseNativeFolder('dest')" class="studio-btn shrink-0 whitespace-nowrap px-2.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 font-mono text-[10px]">
 
               Browse
 
@@ -5306,12 +5306,14 @@
 
     const existingAudio = document.getElementById("htmlAudioPlayer") || document.querySelector("audio");
 
+    /* HMS_LAYOUT_ORDER_FIX_V1_4_1 */
+    const waveCanvasEl = document.getElementById("waveform-canvas");
+    const waveSection = waveCanvasEl ? waveCanvasEl.closest("section") : null;
     const targetHost =
-
+      waveSection ||
       document.querySelector(".audition-deck") ||
-
       (existingAudio ? existingAudio.parentElement : null) ||
-
+      document.querySelector("main") ||
       document.body;
 
 
@@ -5877,879 +5879,422 @@
 
 
 <!-- HMS_FREE_TIER_MULTIPASS_UI_V1_4 -->
-
 <style>
-
   #hms-free-tier-recipe-card {
-
     margin-top: 8px;
-
     padding: 10px 12px;
-
     background: linear-gradient(180deg, #0b1324 0%, #070d19 100%);
-
     border: 1px solid #1e3a5f;
-
     border-radius: 8px;
-
     font-family: "Segoe UI", system-ui, sans-serif;
-
     color: #e2e8f0;
-
   }
-
   .hms-ft-top-row {
-
     display: flex;
-
     align-items: center;
-
     justify-content: space-between;
-
     flex-wrap: wrap;
-
     gap: 10px;
-
     margin-bottom: 8px;
-
   }
-
   .hms-ft-title-group {
-
     display: flex;
-
     align-items: center;
-
     gap: 8px;
-
     flex-wrap: wrap;
-
   }
-
   .hms-ft-pill {
-
     font-size: 11px;
-
     font-weight: 700;
-
     padding: 3px 8px;
-
     border-radius: 999px;
-
     letter-spacing: 0.3px;
-
   }
-
   .hms-ft-pill.safe {
-
     background: #064e3b;
-
     color: #6ee7b7;
-
     border: 1px solid #10b981;
-
   }
-
   .hms-ft-pill.pro {
-
     background: #451a03;
-
     color: #fcd34d;
-
     border: 1px solid #f59e0b;
-
   }
-
   .hms-ft-toggle-label {
-
     display: inline-flex;
-
     align-items: center;
-
     gap: 6px;
-
     background: #111c32;
-
     border: 1px solid #2b456b;
-
     border-radius: 6px;
-
     padding: 4px 10px;
-
     font-size: 12px;
-
     font-weight: 600;
-
     cursor: pointer;
-
     user-select: none;
-
   }
-
   .hms-ft-passes-grid {
-
     display: grid;
-
     grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-
     gap: 8px;
-
     margin-bottom: 8px;
-
   }
-
   .hms-ft-pass-item {
-
     display: flex;
-
     align-items: flex-start;
-
     gap: 7px;
-
     background: #0e1729;
-
     border: 1px solid #1f324f;
-
     border-radius: 6px;
-
     padding: 7px 9px;
-
     font-size: 11px;
-
     cursor: pointer;
-
   }
-
-  .hms-ft-pass-item:hover {
-
-    border-color: #38bdf8;
-
-  }
-
-  .hms-ft-pass-title {
-
-    font-weight: 700;
-
-    color: #7dd3fc;
-
-    display: block;
-
-  }
-
-  .hms-ft-pass-sub {
-
-    color: #94a3b8;
-
-    font-size: 10px;
-
-  }
-
+  .hms-ft-pass-item:hover { border-color: #38bdf8; }
+  .hms-ft-pass-title { font-weight: 700; color: #7dd3fc; display: block; }
+  .hms-ft-pass-sub { color: #94a3b8; font-size: 10px; }
   .hms-ft-actions {
-
     display: flex;
-
     align-items: center;
-
     justify-content: space-between;
-
     flex-wrap: wrap;
-
     gap: 8px;
-
   }
-
   .hms-ft-btn-run {
-
     background: #0284c7;
-
     color: #fff;
-
     border: none;
-
     border-radius: 5px;
-
     padding: 6px 14px;
-
     font-size: 12px;
-
     font-weight: 700;
-
     cursor: pointer;
-
   }
-
-  .hms-ft-btn-run:disabled {
-
-    opacity: 0.5;
-
-    cursor: not-allowed;
-
-  }
-
+  .hms-ft-btn-run:disabled { opacity: 0.5; cursor: not-allowed; }
   .hms-ft-btn-cancel {
-
     background: #7f1d1d;
-
     color: #fecaca;
-
     border: none;
-
     border-radius: 5px;
-
     padding: 6px 10px;
-
     font-size: 12px;
-
     font-weight: 600;
-
     cursor: pointer;
-
   }
-
-  .hms-ft-btn-cancel:disabled {
-
-    opacity: 0.45;
-
-    cursor: not-allowed;
-
-  }
-
-  #hms-ft-queue-badge {
-
-    font-family: Consolas, monospace;
-
-    font-size: 11px;
-
-    color: #38bdf8;
-
-  }
-
+  .hms-ft-btn-cancel:disabled { opacity: 0.45; cursor: not-allowed; }
+  #hms-ft-queue-badge { font-family: Consolas, monospace; font-size: 11px; color: #38bdf8; }
   #hms-ft-log-box {
-
     margin-top: 8px;
-
     background: #050811;
-
     border: 1px solid #1a2942;
-
     border-radius: 5px;
-
     padding: 6px 9px;
-
     font-family: Consolas, monospace;
-
     font-size: 11px;
-
     max-height: 110px;
-
     overflow-y: auto;
-
     color: #94a3b8;
-
   }
-
 </style>
-
 <script>
-
+/* HMS_FREE_TIER_DOCKED_V1_4_1 */
 (function () {
-
   "use strict";
 
-
-
   const API_BASE = "http://127.0.0.1:8765";
-
   const PREMIUM_MODELS = new Set(["26", "28", "30"]);
-
   const PREMIUM_FORMATS = new Set(["4", "5"]);
-
   const STORAGE_KEY = "hms_mvsep_free_tier_safe";
-
   let mpPollTimer = null;
 
-
-
   function isFreeTierSafeEnabled() {
-
     const cb = document.getElementById("hms-free-tier-safe-cb");
-
     if (cb) return cb.checked;
-
     const saved = localStorage.getItem(STORAGE_KEY);
-
     return saved === null ? true : saved === "true";
-
   }
-
-
 
   function applyFreeTierDropdownLocks(freeSafe) {
-
-    const modelSel = document.getElementById("hms-mvsep-model-select");
-
-    const fmtSel = document.getElementById("hms-mvsep-format-select");
-
+    const modelSel = document.getElementById("mvsep-model-select") || (document.getElementById("mvsep-model-select") || document.getElementById("hms-mvsep-model-select"));
+    const fmtSel = document.getElementById("mvsep-format-select") || (document.getElementById("mvsep-format-select") || document.getElementById("hms-mvsep-format-select"));
     const pill = document.getElementById("hms-ft-mode-pill");
 
-
-
     if (pill) {
-
       pill.className = "hms-ft-pill " + (freeSafe ? "safe" : "pro");
-
       pill.textContent = freeSafe
-
         ? "FREE-TIER SAFE: ON (No Ensembles / 16-Bit Max / 1 Job Queue)"
-
         : "FREE-TIER SAFE: OFF (Premium Credits Mode)";
-
     }
-
-
 
     if (modelSel) {
-
       Array.from(modelSel.options).forEach((opt) => {
-
         if (!opt.dataset.origLabel) opt.dataset.origLabel = opt.textContent;
-
         const isPrem = PREMIUM_MODELS.has(String(opt.value));
-
         opt.disabled = freeSafe && isPrem;
-
         opt.textContent = freeSafe && isPrem
-
           ? `[PREMIUM BLOCKED] ${opt.dataset.origLabel}`
-
           : opt.dataset.origLabel;
-
       });
-
       if (freeSafe && PREMIUM_MODELS.has(String(modelSel.value))) {
-
-        modelSel.value = "63"; // Snap safely to BS Roformer SW 6-Stems
-
+        modelSel.value = "63";
       }
-
     }
-
-
 
     if (fmtSel) {
-
       Array.from(fmtSel.options).forEach((opt) => {
-
         if (!opt.dataset.origLabel) opt.dataset.origLabel = opt.textContent;
-
         const isPrem = PREMIUM_FORMATS.has(String(opt.value));
-
         opt.disabled = freeSafe && isPrem;
-
         opt.textContent = freeSafe && isPrem
-
           ? `[PREMIUM BLOCKED] ${opt.dataset.origLabel}`
-
           : opt.dataset.origLabel;
-
       });
-
       if (freeSafe && PREMIUM_FORMATS.has(String(fmtSel.value))) {
-
-        fmtSel.value = "1"; // Snap safely to WAV 16-bit
-
+        fmtSel.value = "1";
       }
-
     }
-
   }
-
-
 
   async function callMultipassApi(pyMethod, restPath, method, payload) {
-
     if (window.pywebview && window.pywebview.api && typeof window.pywebview.api[pyMethod] === "function") {
-
       return payload !== undefined
-
         ? await window.pywebview.api[pyMethod](payload)
-
         : await window.pywebview.api[pyMethod]();
-
     }
-
     const opts = { method: method || "GET", headers: { "Content-Type": "application/json" } };
-
     if (method === "POST") opts.body = JSON.stringify(payload || {});
-
     const resp = await fetch(API_BASE + restPath, opts);
-
     return await resp.json();
-
   }
-
-
 
   function renderMultipassLogs(lines) {
-
     const box = document.getElementById("hms-ft-log-box");
-
     if (!box || !Array.isArray(lines) || !lines.length) return;
-
     box.innerHTML = lines.map((line) => {
-
       const safe = String(line).replace(/</g, "&lt;");
-
       let color = "#94a3b8";
-
       if (safe.includes("[SUCCESS]")) color = "#22c55e";
-
       else if (safe.includes("[ERROR]")) color = "#ef4444";
-
       else if (safe.includes("[RUN]")) color = "#38bdf8";
-
       return `<div style="color:${color};">${safe}</div>`;
-
     }).join("");
-
     box.scrollTop = box.scrollHeight;
-
   }
-
-
 
   function syncWorkspaceFolder(folderPath) {
-
     if (!folderPath) return;
-
-    const direct = document.getElementById("songDirInput");
-
+    const direct = document.getElementById("input-source-dir") || (document.getElementById("input-source-dir") || document.getElementById("songDirInput"));
     if (direct && direct.value !== folderPath) {
-
       direct.value = folderPath;
-
       direct.dispatchEvent(new Event("input", { bubbles: true }));
-
       direct.dispatchEvent(new Event("change", { bubbles: true }));
-
     }
-
   }
-
-
 
   function getSavedTokenFromPage() {
-
-    const el1 = document.getElementById("mvsepTokenInput");
-
+    const el1 = document.getElementById("input-mvsep-key") || (document.getElementById("input-mvsep-key") || document.getElementById("mvsepTokenInput"));
     const el2 = document.getElementById("hms-mvsep-key-input");
-
     return (el1 && el1.value.trim()) || (el2 && el2.value.trim()) || localStorage.getItem("hms_mvsep_api_token") || "";
-
   }
-
-
 
   function mountFreeTierRecipeCard() {
-
     if (document.getElementById("hms-free-tier-recipe-card")) {
-
       applyFreeTierDropdownLocks(isFreeTierSafeEnabled());
-
       return;
-
     }
 
-
-
+    // Dock strictly inside Tab 2 (#tab-panel-mvsep) right above #hms-recipe-panel
+    const mvsepTab = document.getElementById("tab-panel-mvsep");
+    const recipePanel = document.getElementById("hms-recipe-panel");
     const splitterDeck = document.getElementById("hms-mvsep-splitter-deck");
 
-    const host = splitterDeck || document.body;
-
-
-
     const card = document.createElement("div");
-
     card.id = "hms-free-tier-recipe-card";
-
     card.innerHTML = `
-
       <div class="hms-ft-top-row">
-
         <div class="hms-ft-title-group">
-
           <strong style="font-size:12px;color:#38bdf8;">MULTI-PASS SEQUENTIAL RECIPE CARD (1 JOB AT A TIME)</strong>
-
           <span id="hms-ft-mode-pill" class="hms-ft-pill safe">FREE-TIER SAFE: ON</span>
-
         </div>
-
         <label class="hms-ft-toggle-label" title="Blocks Premium Ensemble models (26/28/30), blocks 24/32-bit formats (4/5), and enforces 1 concurrent cloud job">
-
           <input type="checkbox" id="hms-free-tier-safe-cb" checked />
-
           Free-Tier Safe Mode (Recommended)
-
         </label>
-
       </div>
-
-
 
       <div class="hms-ft-passes-grid">
-
         <label class="hms-ft-pass-item">
-
           <input type="checkbox" class="hms-ft-pass-cb" value="pass1_vocals" checked />
-
           <div>
-
             <span class="hms-ft-pass-title">Pass 1: Vocals</span>
-
             <span class="hms-ft-pass-sub">BS Roformer 124-Band Standalone (sep=40, opt1=171) — keeps Vocals</span>
-
           </div>
-
         </label>
-
         <label class="hms-ft-pass-item">
-
           <input type="checkbox" class="hms-ft-pass-cb" value="pass2_music" checked />
-
           <div>
-
             <span class="hms-ft-pass-title">Pass 2: Music</span>
-
             <span class="hms-ft-pass-sub">BS Roformer SW 6-Stems (sep=63) — keeps Guitar, Piano, Other</span>
-
           </div>
-
         </label>
-
         <label class="hms-ft-pass-item">
-
           <input type="checkbox" class="hms-ft-pass-cb" value="pass3_rhythm" checked />
-
           <div>
-
             <span class="hms-ft-pass-title">Pass 3: Rhythm</span>
-
             <span class="hms-ft-pass-sub">Demucs4 HT ft (sep=20, opt1=0) — keeps Drums &amp; Bass</span>
-
           </div>
-
         </label>
-
         <label class="hms-ft-pass-item">
-
           <input type="checkbox" class="hms-ft-pass-cb" value="pass4_drumsep" />
-
           <div>
-
             <span class="hms-ft-pass-title">Pass 4 (Optional): DrumSep</span>
-
             <span class="hms-ft-pass-sub">DrumSep Standalone (sep=37) — auto-feeds isolated Drums WAV</span>
-
           </div>
-
         </label>
-
       </div>
-
-
 
       <div class="hms-ft-actions">
-
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-
           <button type="button" id="hms-ft-run-multipass-btn" class="hms-ft-btn-run">Run Sequential Multi-Pass Queue</button>
-
           <button type="button" id="hms-ft-cancel-multipass-btn" class="hms-ft-btn-cancel" disabled>Cancel Queue</button>
-
           <label style="font-size:11px;color:#cbd5e1;display:inline-flex;align-items:center;gap:5px;cursor:pointer;">
-
             <input type="checkbox" id="hms-ft-autoclean-cb" checked />
-
             Auto-Clean + 24-Bit Master After Final Pass
-
           </label>
-
         </div>
-
         <span id="hms-ft-queue-badge">Queue: Idle (Max 1 Concurrent Job)</span>
-
       </div>
-
-
 
       <div id="hms-ft-log-box">
-
-        [READY] Pick a song in "Browse Song" above, choose your passes, and run sequentially with duplicate stems isolated automatically.
-
+        [READY] Pick a song in "Master Audio File" above, choose your passes, and run sequentially with duplicate stems isolated automatically.
       </div>
-
     `;
 
-
-
     if (splitterDeck) {
-
       splitterDeck.appendChild(card);
-
+    } else if (mvsepTab && recipePanel && recipePanel.parentNode === mvsepTab) {
+      mvsepTab.insertBefore(card, recipePanel);
+    } else if (mvsepTab) {
+      mvsepTab.appendChild(card);
     } else {
-
-      host.prepend(card);
-
+      document.body.appendChild(card);
     }
 
-
-
     const safeCb = document.getElementById("hms-free-tier-safe-cb");
-
     const runBtn = document.getElementById("hms-ft-run-multipass-btn");
-
     const cancelBtn = document.getElementById("hms-ft-cancel-multipass-btn");
-
     const badge = document.getElementById("hms-ft-queue-badge");
 
-
-
-    // Restore persisted preference (defaults to Free-Tier Safe ON)
-
     const savedPref = localStorage.getItem(STORAGE_KEY);
-
     safeCb.checked = savedPref === null ? true : savedPref === "true";
-
     applyFreeTierDropdownLocks(safeCb.checked);
 
-
-
     safeCb.addEventListener("change", () => {
-
       localStorage.setItem(STORAGE_KEY, String(safeCb.checked));
-
       applyFreeTierDropdownLocks(safeCb.checked);
-
     });
-
-
 
     runBtn.addEventListener("click", async () => {
-
-      let songPathEl = document.getElementById("hms-mvsep-song-path");
-
+      const songPathEl = document.getElementById("mvsep-file-path") || (document.getElementById("mvsep-file-path") || document.getElementById("hms-mvsep-song-path"));
       let filePath = songPathEl ? songPathEl.value.trim() : "";
 
-
-
-      // If no song selected yet, trigger native file picker automatically
-
       if (!filePath) {
-
         try {
-
           const picked = await callMultipassApi("browse_song_file", "/api/browse_song", "POST", {});
-
           if (picked && picked.status === "ok" && picked.file_path) {
-
             filePath = picked.file_path;
-
             if (songPathEl) songPathEl.value = filePath;
-
           }
-
         } catch (e) {}
-
       }
-
-
 
       if (!filePath) {
-
-        renderMultipassLogs(["[ERROR] Select a song WAV/FLAC/MP3 file first via 'Browse Song'."]);
-
+        renderMultipassLogs(["[ERROR] Select a song WAV/FLAC/MP3 file first via 'Browse File'."]);
         return;
-
       }
-
-
 
       const passIds = Array.from(document.querySelectorAll(".hms-ft-pass-cb:checked")).map((c) => c.value);
-
       if (!passIds.length) {
-
         renderMultipassLogs(["[ERROR] Check at least one recipe pass to run."]);
-
         return;
-
       }
 
-
-
-      const fmtSel = document.getElementById("hms-mvsep-format-select");
-
+      const fmtSel = document.getElementById("mvsep-format-select") || (document.getElementById("mvsep-format-select") || document.getElementById("hms-mvsep-format-select"));
       let outputFmt = fmtSel ? parseInt(fmtSel.value, 10) : 1;
-
       if (safeCb.checked && PREMIUM_FORMATS.has(String(outputFmt))) {
-
         outputFmt = 1;
-
         if (fmtSel) fmtSel.value = "1";
-
       }
-
-
 
       const payload = {
-
         file_path: filePath,
-
         api_token: getSavedTokenFromPage(),
-
         pass_ids: passIds,
-
         output_format: outputFmt,
-
         free_tier_safe: safeCb.checked,
-
         auto_clean: document.getElementById("hms-ft-autoclean-cb").checked,
-
       };
 
-
-
       runBtn.disabled = true;
-
       cancelBtn.disabled = false;
-
       badge.textContent = `Queue: Starting ${passIds.length} sequential pass(es)...`;
 
-
-
       try {
-
-        const res = await callMultipassApi(
-
-          "start_mvsep_multipass",
-
-          "/api/mvsep/multipass/start",
-
-          "POST",
-
-          payload
-
-        );
-
+        const res = await callMultipassApi("start_mvsep_multipass", "/api/mvsep/multipass/start", "POST", payload);
         if (!res || res.status !== "ok") {
-
           renderMultipassLogs([`[ERROR] ${res ? res.message : "Failed starting sequential queue."}`]);
-
           runBtn.disabled = false;
-
           cancelBtn.disabled = true;
-
           badge.textContent = "Queue: Blocked / Idle";
-
           return;
-
         }
 
-
-
         if (mpPollTimer) clearInterval(mpPollTimer);
-
         mpPollTimer = setInterval(async () => {
-
           try {
-
             const st = await callMultipassApi("get_mvsep_multipass_status", "/api/mvsep/multipass/status", "GET");
-
             if (st && st.logs) renderMultipassLogs(st.logs);
-
             if (st && st.song_workspace_dir) syncWorkspaceFolder(st.song_workspace_dir);
-
             if (st && st.running) {
-
               badge.textContent = `Pass ${st.current_pass_index}/${st.total_passes}: ${st.current_pass_label}`;
-
             } else {
-
               clearInterval(mpPollTimer);
-
               mpPollTimer = null;
-
               runBtn.disabled = false;
-
               cancelBtn.disabled = true;
-
               badge.textContent = st && st.error ? "Queue: Halted (Check Logs)" : "Queue: Complete";
-
             }
-
           } catch (pollErr) {}
-
         }, 1500);
-
       } catch (err) {
-
         renderMultipassLogs([`[ERROR] Bridge/REST call failed: ${err}`]);
-
         runBtn.disabled = false;
-
         cancelBtn.disabled = true;
-
         badge.textContent = "Queue: Error";
-
       }
-
     });
-
-
 
     cancelBtn.addEventListener("click", async () => {
-
       try {
-
         await callMultipassApi("cancel_mvsep_multipass", "/api/mvsep/multipass/cancel", "POST", {});
-
         badge.textContent = "Queue: Cancelling...";
-
       } catch (e) {}
-
     });
-
   }
-
-
-
-  // Wait briefly so injected #hms-mvsep-splitter-deck mounts first, then dock cleanly inside it
 
   function scheduleMount() {
-
-    setTimeout(mountFreeTierRecipeCard, 350);
-
-    setTimeout(() => applyFreeTierDropdownLocks(isFreeTierSafeEnabled()), 900);
-
+    setTimeout(mountFreeTierRecipeCard, 250);
+    setTimeout(() => applyFreeTierDropdownLocks(isFreeTierSafeEnabled()), 750);
   }
-
-
 
   if (document.readyState === "loading") {
-
     document.addEventListener("DOMContentLoaded", scheduleMount);
-
   } else {
-
     scheduleMount();
-
   }
-
   window.addEventListener("pywebviewready", scheduleMount);
-
 })();
-
 </script>
-
 <!-- /HMS_FREE_TIER_MULTIPASS_UI_V1_4 -->
 
 
@@ -6814,6 +6359,495 @@
 })();
 </script>
 
+
+<!-- HMS_DOM_ORDER_GUARD_V1_4_2 -->
+<script>
+(function () {
+  "use strict";
+
+  function enforceHmsUiOrder() {
+    try {
+      const body = document.body;
+      const header = document.querySelector("header");
+      const main = document.querySelector("main");
+      const waveCanvas = document.getElementById("waveform-canvas");
+      const waveSection = waveCanvas ? waveCanvas.closest("section") : null;
+      const mvsepTab = document.getElementById("tab-panel-mvsep");
+      const recipePanel = document.getElementById("hms-recipe-panel");
+      const consoleEl = document.getElementById("studio-console");
+      const consoleSection = consoleEl ? consoleEl.closest("section") : null;
+
+      // 1. Keep sticky Studio Header as the absolute first element in body
+      if (body && header && body.firstElementChild !== header) {
+        body.insertBefore(header, body.firstElementChild);
+      }
+      if (body && header && main && header.nextElementSibling !== main) {
+        header.insertAdjacentElement("afterend", main);
+      }
+
+      // 2. Move Multi-Pass Free-Tier card strictly inside Tab 2 (above #hms-recipe-panel)
+      const ftCard = document.getElementById("hms-free-tier-recipe-card");
+      if (ftCard && mvsepTab) {
+        if (recipePanel && recipePanel.parentNode === mvsepTab) {
+          if (ftCard.parentNode !== mvsepTab || ftCard.nextElementSibling !== recipePanel) {
+            mvsepTab.insertBefore(ftCard, recipePanel);
+          }
+        } else if (ftCard.parentNode !== mvsepTab) {
+          mvsepTab.appendChild(ftCard);
+        }
+      }
+
+      // 3. Dock Real-Time Stereo PCM Waveform card inside top Waveform Monitor section
+      const rwCard = document.getElementById("hms-real-wave-card");
+      if (rwCard && waveSection && rwCard.parentNode !== waveSection) {
+        waveSection.appendChild(rwCard);
+      }
+
+      // 4. Keep Telemetry Console section anchored at the very bottom of main
+      if (main && consoleSection && main.lastElementChild !== consoleSection) {
+        main.appendChild(consoleSection);
+      }
+
+      // 5. Ensure Browse buttons never clip horizontally
+      document.querySelectorAll('button[onclick*="browseNativeFolder"]').forEach((btn) => {
+        btn.style.flexShrink = "0";
+        btn.style.whiteSpace = "nowrap";
+      });
+    } catch (e) {
+      console.error("[HMS_DOM_ORDER_GUARD]", e);
+    }
+  }
+
+  // Enforce immediately, after delayed mounts (250ms/750ms), and whenever body children mutate
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", enforceHmsUiOrder);
+  } else {
+    enforceHmsUiOrder();
+  }
+  window.addEventListener("pywebviewready", enforceHmsUiOrder);
+  setTimeout(enforceHmsUiOrder, 100);
+  setTimeout(enforceHmsUiOrder, 450);
+  setTimeout(enforceHmsUiOrder, 1200);
+
+  const obs = new MutationObserver(() => enforceHmsUiOrder());
+  if (document.body) {
+    obs.observe(document.body, { childList: true });
+  } else {
+    document.addEventListener("DOMContentLoaded", () => {
+      obs.observe(document.body, { childList: true });
+    });
+  }
+})();
+</script>
+<!-- /HMS_DOM_ORDER_GUARD_V1_4_2 -->
+
+<!-- HMS_COLLAPSIBLE_PANELS_V1_4_1 -->
+<style>
+  /* Hide everything inside a collapsed panel except its header row (.hms-col-keep) */
+  .hms-panel-collapsed > :not(.hms-col-keep) {
+    display: none !important;
+  }
+  .hms-panel-collapsed {
+    padding-bottom: 10px !important;
+    min-height: 0 !important;
+  }
+  .hms-panel-collapsed > .hms-col-keep {
+    margin-bottom: 0 !important;
+    padding-bottom: 0 !important;
+    border-bottom: none !important;
+  }
+  .hms-collapse-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    margin-right: 8px;
+    border-radius: 5px;
+    border: 1px solid #2b3c57;
+    background: #0f172a;
+    color: #38bdf8;
+    font-size: 11px;
+    font-weight: 800;
+    line-height: 1;
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+  }
+  .hms-collapse-btn:hover {
+    background: #1e293b;
+    border-color: #38bdf8;
+    color: #7dd3fc;
+  }
+  .hms-panel-collapsed .hms-collapse-btn {
+    color: #fbbf24;
+    border-color: #78350f;
+  }
+</style>
+<script>
+(function () {
+  "use strict";
+
+  const STORAGE_KEY = "hms_collapsed_panels_v1_4_1";
+
+  function loadCollapseState() {
+    try {
+      return JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}") || {};
+    } catch (e) {
+      return {};
+    }
+  }
+
+  function saveCollapseState(stateMap) {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(stateMap));
+    } catch (e) {}
+  }
+
+  function resolveCollapsibleTarget(el) {
+    let target = el;
+    // Unwrap single-child container divs so we bind to the box holding header + body siblings
+    while (target && target.children.length === 1 && target.firstElementChild.tagName === "DIV") {
+      target = target.firstElementChild;
+    }
+    return target && target.children.length >= 2 ? target : null;
+  }
+
+  function attachCollapseToggle(rawPanel, panelKey) {
+    const panel = resolveCollapsibleTarget(rawPanel);
+    if (!panel || panel.dataset.hmsCollapsibleBound === "1") return;
+    // Never collapse the slim Source/Dest directory bar
+    if (panel.querySelector("#input-source-dir") && !panel.querySelector('input[type="range"]')) return;
+
+    const headerEl = panel.firstElementChild;
+    if (!headerEl || headerEl.tagName === "CANVAS" || headerEl.tagName === "AUDIO") return;
+
+    panel.dataset.hmsCollapsibleBound = "1";
+    panel.dataset.hmsPanelKey = panelKey;
+    headerEl.classList.add("hms-col-keep");
+
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "hms-collapse-btn";
+    btn.setAttribute("aria-label", "Collapse or expand panel");
+
+    function applyState(collapsed) {
+      panel.classList.toggle("hms-panel-collapsed", collapsed);
+      btn.textContent = collapsed ? "▸" : "▾";
+      btn.title = collapsed ? "Expand panel" : "Collapse panel";
+    }
+
+    // Restore saved user preference from persistent WebView2 storage
+    const saved = loadCollapseState();
+    applyState(Boolean(saved[panelKey]));
+
+    btn.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      const nextCollapsed = !panel.classList.contains("hms-panel-collapsed");
+      applyState(nextCollapsed);
+      const stateMap = loadCollapseState();
+      stateMap[panelKey] = nextCollapsed;
+      saveCollapseState(stateMap);
+    });
+
+    // Place chevron cleanly to the left of the panel title without disrupting right-side controls
+    const cs = window.getComputedStyle(headerEl);
+    const firstChild = headerEl.firstElementChild;
+    if (
+      firstChild &&
+      firstChild.tagName === "DIV" &&
+      (firstChild.classList.contains("hms-ft-title-group") || window.getComputedStyle(firstChild).display.includes("flex"))
+    ) {
+      firstChild.insertBefore(btn, firstChild.firstChild);
+    } else if (cs.display.includes("flex")) {
+      headerEl.insertBefore(btn, headerEl.firstChild);
+      if (cs.justifyContent === "space-between" && firstChild) {
+        firstChild.style.marginRight = "auto";
+      }
+    } else {
+      headerEl.insertBefore(btn, headerEl.firstChild);
+    }
+  }
+
+  function wireAllHmsCollapsiblePanels() {
+    try {
+      // 1. Top Waveform & FFT Spectrum Monitor + Docked Stereo PCM Card
+      const waveCanvas = document.getElementById("waveform-canvas");
+      const waveSection = waveCanvas ? waveCanvas.closest("section") : null;
+      if (waveSection) attachCollapseToggle(waveSection, "wave-monitor");
+
+      const rwCard = document.getElementById("hms-real-wave-card");
+      if (rwCard) attachCollapseToggle(rwCard, "real-pcm-wave");
+
+      // 2. Tab 1 Mixer Rack Cards (Group A & Group B)
+      const consoleTab = document.getElementById("tab-panel-console") || document.querySelector("main");
+      if (consoleTab) {
+        let rackIdx = 0;
+        consoleTab.querySelectorAll("section, div").forEach((el) => {
+          const first = el.firstElementChild;
+          if (!first) return;
+          const headTxt = (first.textContent || "").toUpperCase();
+          if (
+            (headTxt.includes("GROUP A //") || headTxt.includes("GROUP B //")) &&
+            el.children.length >= 2 &&
+            el.children.length <= 8
+          ) {
+            rackIdx += 1;
+            attachCollapseToggle(el, headTxt.includes("GROUP A") ? "mixer-group-a" : `mixer-group-b-${rackIdx}`);
+          }
+        });
+      }
+
+      // 3. Tab 2 MVSep Cards (Single-Pass, Multi-Pass Free-Tier Card & AI Recipe Chainer)
+      const ftCard = document.getElementById("hms-free-tier-recipe-card");
+      if (ftCard) attachCollapseToggle(ftCard, "multipass-card");
+
+      const recipePanel = document.getElementById("hms-recipe-panel");
+      if (recipePanel) attachCollapseToggle(recipePanel, "recipe-panel");
+
+      const mvsepTab = document.getElementById("tab-panel-mvsep");
+      if (mvsepTab) {
+        let mvIdx = 0;
+        Array.from(mvsepTab.children).forEach((child) => {
+          if (child.id === "hms-free-tier-recipe-card" || child.id === "hms-recipe-panel") return;
+          mvIdx += 1;
+          attachCollapseToggle(child, `mvsep-card-${mvIdx}`);
+        });
+      }
+
+      // 4. Tab 3 AI Mix & Suno Advisor Cards
+      const aiTab = document.getElementById("tab-panel-ai") || document.getElementById("tab-panel-advisor");
+      if (aiTab) {
+        let aiIdx = 0;
+        Array.from(aiTab.children).forEach((child) => {
+          aiIdx += 1;
+          attachCollapseToggle(child, `ai-card-${aiIdx}`);
+        });
+      }
+
+      // 5. Bottom Telemetry Console
+      const consoleEl = document.getElementById("studio-console");
+      const consoleSection = consoleEl ? consoleEl.closest("section") : null;
+      if (consoleSection) attachCollapseToggle(consoleSection, "telemetry-console");
+    } catch (err) {
+      console.error("[HMS_COLLAPSIBLE_PANELS]", err);
+    }
+  }
+
+  function scheduleWire() {
+    wireAllHmsCollapsiblePanels();
+    setTimeout(wireAllHmsCollapsiblePanels, 350);
+    setTimeout(wireAllHmsCollapsiblePanels, 1000);
+    setTimeout(wireAllHmsCollapsiblePanels, 1800);
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", scheduleWire);
+  } else {
+    scheduleWire();
+  }
+  window.addEventListener("pywebviewready", scheduleWire);
+})();
+</script>
+<!-- /HMS_COLLAPSIBLE_PANELS_V1_4_1 -->
+
+<!-- HMS_DAW_LIVE_API_VERIFY_UI_V1_4_1 -->
+<script>
+(function () {
+  "use strict";
+
+  const API_BASE = "http://127.0.0.1:8765";
+
+  function logToDawConsole(msg, color) {
+    const box = document.getElementById("studio-console");
+    if (!box) return;
+    const line = document.createElement("div");
+    const ts = new Date().toTimeString().slice(0, 8);
+    line.style.color = color || "#94a3b8";
+    line.textContent = `[${ts}] ${msg}`;
+    box.appendChild(line);
+    box.scrollTop = box.scrollHeight;
+  }
+
+  async function runLiveApiVerify(btn, silentOnAuto) {
+    if (!btn) return;
+    btn.disabled = true;
+    btn.textContent = "Testing APIs...";
+    btn.style.borderColor = "#38bdf8";
+    btn.style.color = "#7dd3fc";
+
+    try {
+      let res = null;
+      if (window.pywebview && window.pywebview.api && typeof window.pywebview.api.verify_api_keys === "function") {
+        res = await window.pywebview.api.verify_api_keys({});
+      } else {
+        const resp = await fetch(API_BASE + "/api/verify_keys");
+        res = await resp.json();
+      }
+
+      if (res && res.gemini_ok) {
+        btn.textContent = `Gemini OK (${res.gemini_model || "Live"})`;
+        btn.style.borderColor = "#10b981";
+        btn.style.color = "#6ee7b7";
+        btn.title = `Gemini: ${res.gemini_detail} | MVSep: ${res.mvsep_detail}`;
+        logToDawConsole(`[SUCCESS] DAW Live API Check -> Gemini: ${res.gemini_detail} | MVSep: ${res.mvsep_detail}`, "#22c55e");
+      } else {
+        const detail = (res && res.gemini_detail) ? res.gemini_detail : "Unknown error";
+        btn.textContent = "Gemini Offline (Click to Retry)";
+        btn.style.borderColor = "#f59e0b";
+        btn.style.color = "#fcd34d";
+        btn.title = `Gemini: ${detail} | MVSep: ${res ? res.mvsep_detail : ""}`;
+        if (!silentOnAuto) {
+          logToDawConsole(`[ERROR] DAW Live API Check -> Gemini: ${detail}`, "#f87171");
+        } else {
+          logToDawConsole(`[INFO] Startup API Check -> Gemini: ${detail}`, "#fbbf24");
+        }
+      }
+    } catch (err) {
+      btn.textContent = "API Check Failed";
+      btn.style.borderColor = "#ef4444";
+      btn.style.color = "#fca5a5";
+      logToDawConsole(`[ERROR] Live API verify call failed: ${err}`, "#f87171");
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  function mountTestApisButton() {
+    if (document.getElementById("hms-test-live-apis-btn")) return;
+    const header = document.querySelector("header");
+    if (!header) return;
+
+    // Locate the API Vault button inside the studio header
+    const vaultBtn = Array.from(header.querySelectorAll("button")).find((b) =>
+      (b.textContent || "").toLowerCase().includes("api vault")
+    );
+    if (!vaultBtn || !vaultBtn.parentElement) return;
+
+    const testBtn = document.createElement("button");
+    testBtn.id = "hms-test-live-apis-btn";
+    testBtn.type = "button";
+    testBtn.textContent = "Test APIs";
+    testBtn.style.cssText =
+      "padding:5px 10px;border-radius:6px;border:1px solid #334155;background:#0f172a;" +
+      "color:#cbd5e1;font-family:Consolas,monospace;font-size:11px;font-weight:700;" +
+      "cursor:pointer;white-space:nowrap;flex-shrink:0;";
+    testBtn.addEventListener("click", () => runLiveApiVerify(testBtn, false));
+
+    vaultBtn.insertAdjacentElement("afterend", testBtn);
+
+    // Run one automatic non-blocking check on launch so status is immediately visible
+    setTimeout(() => runLiveApiVerify(testBtn, true), 900);
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", () => setTimeout(mountTestApisButton, 300));
+  } else {
+    setTimeout(mountTestApisButton, 300);
+  }
+  window.addEventListener("pywebviewready", () => setTimeout(mountTestApisButton, 300));
+})();
+</script>
+<!-- /HMS_DAW_LIVE_API_VERIFY_UI_V1_4_1 -->
+
+<!-- HMS_EMPTY_DIR_UI_GUARD_V1_4_1 -->
+<script>
+(function () {
+  "use strict";
+
+  function logEmptyDirError(actionLabel) {
+    const box = document.getElementById("studio-console");
+    const ts = new Date().toTimeString().slice(0, 8);
+    const msg = `[${ts}] [ERROR] No Source Song Dir set! Click "Browse" next to Source Song Dir before running "${actionLabel}".`;
+    if (box) {
+      const div = document.createElement("div");
+      div.style.color = "#f87171";
+      div.style.fontWeight = "600";
+      div.textContent = msg;
+      box.appendChild(div);
+      box.scrollTop = box.scrollHeight;
+    }
+
+    // Highlight and scroll to the Source Song Dir field so the user sees what is missing
+    const srcEl = document.getElementById("input-source-dir") || document.getElementById("songDirInput");
+    if (srcEl) {
+      const container = srcEl.parentElement || srcEl;
+      const prevShadow = container.style.boxShadow;
+      const prevBorder = container.style.borderColor;
+      container.style.borderColor = "#f59e0b";
+      container.style.boxShadow = "0 0 0 2px rgba(245, 158, 11, 0.75)";
+      srcEl.scrollIntoView({ behavior: "smooth", block: "center" });
+      setTimeout(() => {
+        container.style.borderColor = prevBorder;
+        container.style.boxShadow = prevShadow;
+      }, 2200);
+    }
+  }
+
+  function hasValidSourceDir() {
+    const srcEl = document.getElementById("input-source-dir") || document.getElementById("songDirInput");
+    if (!srcEl) return true;
+    const val = String(srcEl.value || "").trim();
+    if (!val || val === "." || val === ".." || val.toLowerCase().includes("click browse")) {
+      return false;
+    }
+    return true;
+  }
+
+  // Capture-phase click listener fires BEFORE inline onclick handlers on Tab 1 DSP buttons
+  document.addEventListener(
+    "click",
+    function (ev) {
+      const btn = ev.target && ev.target.closest ? ev.target.closest("button") : null;
+      if (!btn) return;
+
+      // Never intercept Tab 2 MVSep/Recipe buttons or header Vault/Test buttons
+      if (btn.closest("#tab-panel-mvsep") || btn.closest("header")) return;
+
+      const txt = (btn.textContent || "").replace(/\s+/g, " ").trim();
+      const lowerTxt = txt.toLowerCase();
+      const onclickStr = (btn.getAttribute("onclick") || "").toLowerCase();
+
+      const isExcluded =
+        lowerTxt.includes("browse") ||
+        lowerTxt.includes("save") ||
+        lowerTxt.includes("load") ||
+        lowerTxt.includes("recipe") ||
+        lowerTxt.includes("vault") ||
+        lowerTxt.includes("test") ||
+        lowerTxt.includes("play") ||
+        lowerTxt.includes("stop") ||
+        lowerTxt.includes("reset") ||
+        btn.classList.contains("hms-collapse-btn");
+
+      if (isExcluded) return;
+
+      const requiresDir =
+        lowerTxt.includes("gemini tune") ||
+        lowerTxt.includes("auto-tune") ||
+        lowerTxt.includes("autotune") ||
+        lowerTxt.includes("dry-run") ||
+        lowerTxt.includes("live clean") ||
+        lowerTxt.includes("glue master") ||
+        lowerTxt.includes("glue buses") ||
+        lowerTxt.includes("rollback") ||
+        onclickStr.includes("gemini_tune") ||
+        onclickStr.includes("autotune") ||
+        onclickStr.includes("dry_run") ||
+        onclickStr.includes("glue_only") ||
+        onclickStr.includes("rollback");
+
+      if (requiresDir && !hasValidSourceDir()) {
+        ev.preventDefault();
+        ev.stopImmediatePropagation();
+        logEmptyDirError(txt || "Studio Action");
+      }
+    },
+    true
+  );
+})();
+</script>
+<!-- /HMS_EMPTY_DIR_UI_GUARD_V1_4_1 -->
 </body>
 
 </html>
