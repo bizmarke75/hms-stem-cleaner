@@ -119,7 +119,7 @@ def generate_ai_mix_and_suno_report(
     log_callback(f"[RUN] Requesting AI Mix & Suno Advisor ({provider.upper()}) for '{song_name}'...")
     clean_key = (api_key or "").strip()
     if not clean_key:
-        creds = load_ai_credentials(callback=lambda _: None)
+        creds = load_ai_credentials(log_callback=lambda _: None)
         clean_key = creds.get("gemini_api_key" if provider.lower() == "gemini" else "openai_api_key", "")
     if not clean_key:
         log_callback("[INFO] no LLM API key configured; skipping cloud AI mix report.")
@@ -134,7 +134,7 @@ def generate_ai_mix_and_suno_report(
     )
     try:
         if provider.lower() == "gemini":
-            raw_text, used_model = _query_gemini_with_model_fallback(prompt_text, clean_key, callback)
+            raw_text, used_model = _query_gemini_with_model_fallback(prompt_text, clean_key, log_callback)
         else:
             used_model = "gpt-4o-mini"
             resp = requests.post(
@@ -419,6 +419,49 @@ def _attach_multipass_routes_to_hms_rest():
 
 
 _attach_multipass_routes_to_hms_rest()
+
+
+
+
+
+
+# === HMS_REST_BROWSE_ROUTES_PATCH ===
+def _install_threadsafe_rest_browse_routes():
+    if "_HMSRequestHandler" not in globals():
+        return
+    _prev_post = _HMSRequestHandler.do_POST
+
+    def _browse_do_post(self):
+        low_path = (self.path or "").lower()
+        if any(k in low_path for k in ("/api/browse_song", "/api/browse_file", "/api/pick_file", "/api/mvsep/browse")):
+            try:
+                clen = int(self.headers.get("Content-Length", 0))
+                if clen:
+                    self.rfile.read(clen)
+            except Exception:
+                pass
+            import hms_web_daw_launcher as _wl
+            res = _wl.HMSWebDawBridge().browse_song_file()
+            self._send_json(200, res)
+            return
+        if any(k in low_path for k in ("/api/browse_folder", "/api/pick_folder")):
+            try:
+                clen = int(self.headers.get("Content-Length", 0))
+                if clen:
+                    self.rfile.read(clen)
+            except Exception:
+                pass
+            import hms_web_daw_launcher as _wl
+            res = _wl.HMSWebDawBridge().browse_folder()
+            self._send_json(200, res)
+            return
+        return _prev_post(self)
+
+    _HMSRequestHandler.do_POST = _browse_do_post
+
+
+_install_threadsafe_rest_browse_routes()
+# === /HMS_REST_BROWSE_ROUTES_PATCH ===
 
 
 if __name__ == "__main__":

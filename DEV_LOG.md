@@ -188,3 +188,11 @@ This utility automates the sorting, de-echoing, VST3 DSP cleanup, bus gluing, an
   - Enforces Registered Free Tier guardrails (blocks Premium Ensemble `sep_type` `{26, 28, 30}`, blocks 24/32-bit `output_format` `{4, 5}`, enforces 100 MB cap with lossless FLAC pre-compression, and locks concurrency to max 1 active job).
   - Stages winning stems per pass into `<Song_Name>_Stems\` and isolates duplicate stems into sibling `<Song_Name>_Stems_Unused_Passes\`.
   - Wired into `hms_web_daw_launcher.py` (using AST/runtime bridge auto-discovery + `HMSWebDawBridge` alias), `hms_ai_api_bridge.py`, and `launch_chrome_web_daw.py`.
+
+---
+
+## 10. v1.4.1 WebView2 Dark-Lock Fix, Native JSON Pickers & Full v1.4 Bridge Parity (2026-11-21 21:32)
+- **WebView2 Stability & Canvas Fix:** Guarded `animateSpectrumAndMeters()` against 60x/sec canvas reallocation and enforced `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--disable-gpu-compositing` + `%LOCALAPPDATA%\HMS Studio Suite\WebView2Cache`.
+- **Native Topmost JSON File Pickers:** Added `browse_json_file()` to `HMSWebDawBridge` and intercepted `.json` `<input type="file">` elements in `337_west_hms_unified_studio_web_daw_v1.4.html` so desktop Load JSON / Load Recipe JSON never dim or lock the WebView2 surface.
+- **Full v1.4 Bridge & AI Recipe Generator:** Attached `get_keys_status`, `save_keys`, `generate_recipe`, `execute_stem_cleanup`, `start_mvsep_single_pass`, `run_single_pass`, and `run_all_passes` before `if __name__ == "__main__":`. Verified end-to-end 4-pass recipe generation and master rendering on `C.R.E.A.M. (Blues).wav`.
+- **API Bridge & Docs Hygiene:** Fixed `log_callback` typo in `hms_ai_api_bridge.py`, added `CHANGELOG.md`, archived stray `.rar`/test files, and bumped installer builder to `v1.4.1`.

@@ -1,4 +1,4 @@
-# HMS Unified Studio Suite (`v1.4.0`)
+# HMS Unified Studio Suite (`v1.4.1`)
 **By 337 West Productions** | Automated MVSep Cloud Stem Splitting, Headless 64-Bit VST3 Stem Cleanup & 24-Bit Master Mixdown
 
 > **PROVIDED STRICTLY "AS-IS" (MIT LICENSE — NO WARRANTY OR SUPPORT)**  
@@ -16,7 +16,7 @@
 ## Quick Start (Any Skill Level)
 
 ### Option A: Windows Installer (Recommended — No Python Required)
-1. Download and run **`HMS_Studio_Suite_v1.4.0_Setup.exe`** from the **GitHub Releases** page.
+1. Download and run **`HMS_Studio_Suite_v1.4.1_Setup.exe`** from the **GitHub Releases** page.
 2. Approve the Administrator prompt to install into `C:\Program Files\HMS Studio Suite` (or pick any drive/folder during setup).
 3. *(Optional, Recommended)* Install the 3 free 64-bit `.vst3` plugins into `C:\Program Files\Common Files\VST3`:
    - **TDR Nova** (Dynamic EQ)
@@ -45,7 +45,7 @@ python.exe launch_chrome_web_daw.py         # Google Chrome Studio App Mode (:87
 
 ---
 
-## Core v1.4.0 Repository Layout
+## Core v1.4.1 Repository Layout
 - `337_west_hms_unified_studio_web_daw_v1.4.html` / `hms_web_daw.html` — Dark-mode Web-DAW UI with Real-Time Stereo PCM Waveform, 9-Slider Hardware Rack, and MVSep Free-Tier Multi-Pass Recipe Card.
 - `hms_web_daw_launcher.py` — Native Windows Edge WebView2 (`pywebview`) desktop launcher & JS bridge.
 - `launch_chrome_web_daw.py` — Local HTTP/REST server (`127.0.0.1:8765`) & Google Chrome App Mode launcher.

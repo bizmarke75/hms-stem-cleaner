@@ -10,7 +10,7 @@ import traceback
 from pathlib import Path
 
 HMS_REPO_DIR = r"C:\github\projects\hms-stem-cleaner"
-APP_VERSION = "1.4.0"
+APP_VERSION = "1.4.1"
 APP_NAME = "HMS Unified Studio Suite"
 APP_EXE_BASENAME = "HMS_Studio_Suite"
 V14_HTML_NAME = "337_west_hms_unified_studio_web_daw_v1.4.html"
