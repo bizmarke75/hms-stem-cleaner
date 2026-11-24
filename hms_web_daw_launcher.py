@@ -998,6 +998,113 @@ _hms_install_launcher_dir_guards()
 # === END_HMS_LAUNCHER_EMPTY_DIR_GUARD_PATCH ===
 
 
+
+# === HMS_INDIVIDUAL_STEM_PICKER_BRIDGE_START ===
+def _attach_individual_stem_picker_to_bridge():
+    import json as _json
+    import traceback as _tb
+    import hms_stem_picker_engine as _spe
+
+    def _plan_free_tier_stems(self, payload=None):
+        try:
+            if isinstance(payload, str):
+                payload = _json.loads(payload)
+            payload = payload or {}
+            res = _spe.build_free_tier_stem_plan(
+                selected_stems=payload.get("selected_stems") or [],
+                quality_mode=str(payload.get("quality_mode") or "fast"),
+                output_format=int(payload.get("output_format", 1)),
+            )
+            res["status"] = "ok" if res.get("ok") else "error"
+            return res
+        except Exception:
+            return {"status": "error", "ok": False, "reason": _tb.format_exc(), "passes": []}
+
+    def _start_mvsep_selected_stems(self, payload=None):
+        if not getattr(self, "mp_mod", None):
+            return {"status": "error", "message": "hms_mvsep_multipass.py is not loaded."}
+        try:
+            if isinstance(payload, str):
+                payload = _json.loads(payload)
+            payload = payload or {}
+            creds = self._read_config() if hasattr(self, "_read_config") else {}
+            tok = str(payload.get("api_token") or creds.get("mvsep_api_token") or creds.get("mvsep_token") or "").strip()
+            return self.mp_mod.SHARED_MULTIPASS_RUNNER.start_selected_stems(
+                api_token=tok,
+                song_file_path=str(payload.get("file_path") or "").strip(),
+                selected_stems=payload.get("selected_stems") or ["vocals", "drums", "bass", "guitar", "other"],
+                quality_mode=str(payload.get("quality_mode") or "fast"),
+                output_format=int(payload.get("output_format", 1)),
+                auto_clean=bool(payload.get("auto_clean", False)),
+                mix_style=str(payload.get("mix_style") or "auto"),
+            )
+        except Exception:
+            return {"status": "error", "message": _tb.format_exc()}
+
+    def _recover_mvsep_job_hash(self, payload=None):
+        if not getattr(self, "mp_mod", None):
+            return {"status": "error", "message": "hms_mvsep_multipass.py is not loaded."}
+        try:
+            if isinstance(payload, str):
+                payload = _json.loads(payload)
+            payload = payload or {}
+            return self.mp_mod.SHARED_MULTIPASS_RUNNER.recover_job_hash(
+                job_hash=str(payload.get("job_hash") or "").strip(),
+                target_dir=str(payload.get("target_dir") or "").strip(),
+                selected_stems=payload.get("selected_stems"),
+            )
+        except Exception:
+            return {"status": "error", "message": _tb.format_exc()}
+
+    def _fixed_start_mvsep_separation(self, payload=None):
+        """Replaces hardcoded pass2_music single-pass with exact Free-Tier stem routing."""
+        if not getattr(self, "mp_mod", None):
+            return {"status": "error", "message": "hms_mvsep_multipass.py is not loaded."}
+        try:
+            if isinstance(payload, str):
+                payload = _json.loads(payload)
+            payload = payload or {}
+            sep_type = int(payload.get("sep_type", 63))
+            out_fmt = int(payload.get("output_format", 1))
+            chk = self.mp_mod.validate_mvsep_free_tier_request(
+                sep_type=sep_type,
+                output_format=out_fmt,
+                file_path=str(payload.get("file_path") or "").strip() or None,
+                free_tier_safe=bool(payload.get("free_tier_safe", True)),
+            )
+            if not chk.get("ok"):
+                return {"status": "error", "message": chk.get("reason", "Blocked by Free-Tier Safe Mode.")}
+
+            # Map chosen single-pass model to its actual stems instead of forcing pass2_music
+            if payload.get("selected_stems"):
+                stems = payload["selected_stems"]
+            elif sep_type == 40:
+                stems = ["vocals", "instrumental"]
+            elif sep_type == 20:
+                stems = ["drums", "bass"]
+            else:
+                stems = ["vocals", "drums", "bass", "guitar", "piano", "other"]
+
+            return self.start_mvsep_selected_stems({
+                "file_path": payload.get("file_path", ""),
+                "api_token": payload.get("api_token", ""),
+                "selected_stems": stems,
+                "quality_mode": "fast",
+                "output_format": out_fmt,
+                "auto_clean": bool(payload.get("auto_clean", False)),
+            })
+        except Exception:
+            return {"status": "error", "message": _tb.format_exc()}
+
+    HMSWebDawBridge.plan_free_tier_stems = _plan_free_tier_stems
+    HMSWebDawBridge.start_mvsep_selected_stems = _start_mvsep_selected_stems
+    HMSWebDawBridge.recover_mvsep_job_hash = _recover_mvsep_job_hash
+    HMSWebDawBridge.start_mvsep_separation = _fixed_start_mvsep_separation
+
+
+_attach_individual_stem_picker_to_bridge()
+# === HMS_INDIVIDUAL_STEM_PICKER_BRIDGE_END ===
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="HMS Unified Studio Suite v1.4 Desktop Launcher")
     parser.add_argument("--test-bridge", action="store_true", help="Verify HMSWebDawBridge in isolation")

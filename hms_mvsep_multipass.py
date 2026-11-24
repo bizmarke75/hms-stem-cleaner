@@ -533,6 +533,303 @@ SHARED_MULTIPASS_RUNNER = SequentialMVSepQueueRunner()
 # ==============================================================================
 # ISOLATED VERIFICATION TEST DRIVER (--self-test)
 # ==============================================================================
+
+# === HMS_INDIVIDUAL_STEM_PICKER_MP_START ===
+def _attach_individual_stem_picker_to_runner():
+    import os as _os
+    import shutil as _shutil
+    import threading as _threading
+    import traceback as _tb
+    import requests as _requests
+    import hms_stem_picker_engine as _spe
+
+    def _start_selected_stems(
+        self,
+        api_token,
+        song_file_path,
+        selected_stems,
+        quality_mode="fast",
+        output_format=1,
+        auto_clean=True,
+        mix_style="auto",
+    ):
+        if not api_token or not str(api_token).strip():
+            return {"status": "error", "message": "Missing MVSep API token. Save your token in the API Vault first."}
+        if not song_file_path or not _os.path.isfile(song_file_path):
+            return {"status": "error", "message": f"Audio file not found: {song_file_path}"}
+
+        # Build & validate 100% Free-Tier minimum pass plan for exact user-checked stems
+        plan = _spe.build_free_tier_stem_plan(
+            selected_stems=selected_stems,
+            quality_mode=quality_mode,
+            output_format=output_format,
+        )
+        if not plan.get("ok"):
+            return {"status": "error", "message": plan.get("reason", "Invalid Free-Tier stem selection.")}
+
+        # Check 100 MB Free-Tier upload cap upfront
+        size_mb = _os.path.getsize(song_file_path) / (1024 * 1024)
+        ext = _os.path.splitext(song_file_path)[1].lower()
+        if size_mb > FREE_TIER_MAX_FILE_MB and ext != ".wav":
+            return {
+                "status": "error",
+                "message": f"File is {size_mb:.1f} MB (MVSep Free Tier max is 100 MB; WAVs auto-compress to FLAC).",
+            }
+
+        if not self._job_lock.acquire(blocking=False):
+            msg = "MVSep Free-Tier Lock: Another job is already running (max 1 concurrent job)."
+            self._log(f"[ERROR] {msg}")
+            return {"status": "error", "message": msg}
+
+        self._cancel_event.clear()
+        passes = plan["passes"]
+        with self._state_lock:
+            self._state.update({
+                "running": True,
+                "free_tier_safe": True,
+                "current_pass_index": 0,
+                "total_passes": len(passes),
+                "current_pass_label": "Initializing Free-Tier individual stem queue...",
+                "song_workspace_dir": "",
+                "last_job_hash": "",
+                "pass_hashes": [],
+                "selected_stems": list(plan["selected_stems"]),
+                "error": "",
+                "logs": [
+                    f"[RUN] Free-Tier Individual Stem Queue: stems={plan['selected_stems']} | "
+                    f"mode={quality_mode} | {len(passes)} pass(es)."
+                ],
+            })
+
+        worker = _threading.Thread(
+            target=self._run_selected_stems_worker,
+            args=(
+                api_token.strip(),
+                song_file_path,
+                plan,
+                bool(auto_clean),
+                str(mix_style or "auto"),
+            ),
+            daemon=True,
+        )
+        worker.start()
+        return {
+            "status": "ok",
+            "total_passes": len(passes),
+            "plan": plan,
+            "message": f"Queued {len(passes)} Free-Tier pass(es) for {', '.join(plan['selected_stems'])}.",
+        }
+
+    def _run_selected_stems_worker(self, api_token, song_file_path, plan, auto_clean, mix_style):
+        try:
+            parent_dir = _os.path.dirname(_os.path.abspath(song_file_path))
+            raw_base = _os.path.splitext(_os.path.basename(song_file_path))[0]
+            clean_song = "".join("_" if c in '<>:"/\\|?* ' else c for c in raw_base).strip("_") or "MVSep_Song"
+
+            workspace_dir = _os.path.join(parent_dir, f"{clean_song}_Stems")
+            unused_sibling_dir = _os.path.join(parent_dir, f"{clean_song}_Stems_Unused_Passes")
+            _os.makedirs(workspace_dir, exist_ok=True)
+            isolated_drums_path = None
+            output_format = int(plan["output_format"])
+            passes = plan["passes"]
+
+            with self._state_lock:
+                self._state["song_workspace_dir"] = workspace_dir
+
+            for idx, pspec in enumerate(passes, start=1):
+                if self._cancel_event.is_set():
+                    self._log("[INFO] Queue cancelled by user.")
+                    return
+
+                pid = pspec["pass_id"]
+                with self._state_lock:
+                    self._state["current_pass_index"] = idx
+                    self._state["current_pass_label"] = pspec["label"]
+
+                self._log("=" * 65)
+                self._log(f"[RUN] Pass {idx}/{len(passes)}: {pspec['label']} (keep={pspec['keep_stems']})")
+
+                pass_input = song_file_path
+                if pspec.get("input_source") == "isolated_drums":
+                    if isolated_drums_path and _os.path.isfile(isolated_drums_path):
+                        pass_input = isolated_drums_path
+                        self._log(f"[INFO] Feeding isolated Drums WAV into DrumSep: {_os.path.basename(pass_input)}")
+                    else:
+                        self._log("[ERROR] Skipping DrumSep: isolated Drums stem was not found from prior pass.")
+                        continue
+
+                # 1. Pre-compress WAV > 15 MB to lossless FLAC and upload to MVSep
+                upload_path, is_temp, mime = _prepare_upload_audio(pass_input, self._log)
+                job_hash = ""
+                try:
+                    form_data = {
+                        "api_token": api_token,
+                        "sep_type": str(pspec["sep_type"]),
+                        "output_format": str(output_format),
+                    }
+                    if pspec.get("add_opt1") not in (None, ""):
+                        form_data["add_opt1"] = str(pspec["add_opt1"])
+
+                    base = _os.path.splitext(_os.path.basename(pass_input))[0]
+                    ext = _os.path.splitext(upload_path)[1].lower()
+                    with open(upload_path, "rb") as fh:
+                        resp = _requests.post(
+                            API_CREATE_URL,
+                            data=form_data,
+                            files={"audiofile": (f"{base}{ext}", fh, mime)},
+                            timeout=UPLOAD_SOCKET_TIMEOUT,
+                        )
+                    if resp.status_code != 200:
+                        raise RuntimeError(f"MVSep create HTTP {resp.status_code}: {resp.text[:300]}")
+                    rj = resp.json()
+                    if not rj.get("success"):
+                        raise RuntimeError(rj.get("data", {}).get("message", "MVSep rejected separation job."))
+                    job_hash = str(rj["data"]["hash"])
+                finally:
+                    if is_temp and _os.path.isfile(upload_path):
+                        try:
+                            _os.remove(upload_path)
+                        except OSError:
+                            pass
+
+                with self._state_lock:
+                    self._state["last_job_hash"] = job_hash
+                    self._state.setdefault("pass_hashes", []).append({"pass_id": pid, "hash": job_hash})
+                self._log(f"[SUCCESS] Job accepted! Hash={job_hash} (saveable for instant recovery). Polling every {POLL_INTERVAL_SECONDS}s...")
+
+                # 2. Poll until status == 'done' (no artificial 20-min Free-Tier cutoff)
+                while not self._cancel_event.is_set():
+                    if self._cancel_event.wait(POLL_INTERVAL_SECONDS):
+                        return
+                    try:
+                        poll = _requests.get(API_GET_URL, params={"hash": job_hash}, timeout=REQUEST_TIMEOUT)
+                        if poll.status_code != 200:
+                            self._log(f"[INFO] Poll HTTP {poll.status_code}; retrying...")
+                            continue
+                        pj = poll.json()
+                    except Exception as pex:
+                        self._log(f"[INFO] Transient poll error ({pex}); retrying...")
+                        continue
+
+                    status = str(pj.get("status") or "unknown").lower()
+                    dblock = pj.get("data") if isinstance(pj.get("data"), dict) else {}
+                    if status == "waiting":
+                        self._log(
+                            f"[INFO] Queue WAITING (order={dblock.get('current_order', '?')}, "
+                            f"ahead={dblock.get('queue_count', '?')} | hash={job_hash})"
+                        )
+                    elif status in ("processing", "distributing", "merging"):
+                        self._log(f"[INFO] GPU Status: {status.upper()} (hash={job_hash})...")
+                    elif status == "done":
+                        break
+                    elif status in ("failed", "not_found"):
+                        raise RuntimeError(dblock.get("message", f"MVSep job failed (status={status})"))
+
+                if self._cancel_event.is_set():
+                    return
+
+                # 3. Bulletproof atomic .part download + 3x retries + exact individual-stem filter
+                dl_res = _spe.download_mvsep_job_stems(
+                    job_hash=job_hash,
+                    song_workspace_dir=workspace_dir,
+                    unused_root_dir=unused_sibling_dir,
+                    pass_id=pid,
+                    keep_stems=pspec["keep_stems"],
+                    temp_feed_drums_only=bool(pspec.get("temp_feed_drums_only", False)),
+                    api_get_url=API_GET_URL,
+                    max_retries=3,
+                    log_callback=self._log,
+                )
+                if not dl_res.get("ok"):
+                    raise RuntimeError(dl_res.get("error", f"Download failed for hash={job_hash}"))
+
+                if dl_res.get("isolated_drums"):
+                    isolated_drums_path = dl_res["isolated_drums"]
+
+                if (
+                    pid == "pass4_drumsep"
+                    and pspec.get("archive_unsplit_drums_after")
+                    and dl_res.get("kept")
+                    and isolated_drums_path
+                    and _os.path.isfile(isolated_drums_path)
+                    and _os.path.dirname(_os.path.abspath(isolated_drums_path)) == _os.path.abspath(workspace_dir)
+                ):
+                    _shutil.move(isolated_drums_path, _os.path.join(unused_sibling_dir, _os.path.basename(isolated_drums_path)))
+                    self._log("[INFO] Archived unsplit Drums WAV (replaced by DrumSep kit stems).")
+
+                if idx < len(passes) and not self._cancel_event.is_set():
+                    self._log(f"[INFO] Free-Tier 1-job cooldown ({INTER_PASS_COOLDOWN_SECONDS}s) before next pass...")
+                    self._cancel_event.wait(INTER_PASS_COOLDOWN_SECONDS)
+
+            self._log(f"[SUCCESS] Selected stems ready in: {workspace_dir}")
+
+            if auto_clean and not self._cancel_event.is_set():
+                self._log("[RUN] Triggering HMS Stem Cleaner VST3 Auto-Clean + 24-Bit Master...")
+                try:
+                    import hms_stem_cleaner_app as _hms
+                    _hms.execute_stem_cleanup(
+                        source_dir=workspace_dir,
+                        dest_root=None,
+                        dry_run=False,
+                        move_source_files=False,
+                        render_master=True,
+                    )
+                    self._log("[SUCCESS] HMS Auto-Clean & 24-Bit Master Mixdown complete!")
+                except Exception:
+                    self._log("[ERROR] Post-pass HMS Auto-Clean failed:")
+                    self._log(_tb.format_exc())
+
+        except Exception as ex:
+            with self._state_lock:
+                self._state["error"] = str(ex)
+            self._log(f"[ERROR] Free-Tier stem queue halted: {ex}")
+            self._log(_tb.format_exc())
+        finally:
+            with self._state_lock:
+                self._state["running"] = False
+            self._job_lock.release()
+
+    def _recover_job_hash(self, job_hash, target_dir="", selected_stems=None):
+        clean_hash = str(job_hash or "").strip()
+        if not clean_hash:
+            return {"status": "error", "message": "Enter a valid MVSep Job Hash to recover."}
+        out_dir = str(target_dir or "").strip()
+        if not out_dir:
+            out_dir = self._state.get("song_workspace_dir") or _os.path.join(_os.path.expanduser("~"), "Downloads", f"MVSep_{clean_hash}_Stems")
+        out_dir = _os.path.normpath(out_dir)
+        unused_dir = f"{out_dir}_Unused_Passes"
+        keep = [str(s).strip().lower() for s in selected_stems if str(s).strip()] if selected_stems else None
+        res = _spe.download_mvsep_job_stems(
+            job_hash=clean_hash,
+            song_workspace_dir=out_dir,
+            unused_root_dir=unused_dir,
+            pass_id="recovered",
+            keep_stems=keep,
+            api_get_url=API_GET_URL,
+            max_retries=3,
+            log_callback=self._log,
+        )
+        if res.get("ok"):
+            with self._state_lock:
+                self._state["song_workspace_dir"] = out_dir
+                self._state["last_job_hash"] = clean_hash
+            return {
+                "status": "ok",
+                "song_workspace_dir": out_dir,
+                "kept": res["kept"],
+                "archived": res["archived"],
+                "message": f"Recovered {len(res['kept'])} stem(s) into {out_dir}",
+            }
+        return {"status": "error", "message": res.get("error", "Recovery failed."), "job_status": res.get("status", "error")}
+
+    SequentialMVSepQueueRunner.start_selected_stems = _start_selected_stems
+    SequentialMVSepQueueRunner._run_selected_stems_worker = _run_selected_stems_worker
+    SequentialMVSepQueueRunner.recover_job_hash = _recover_job_hash
+
+
+_attach_individual_stem_picker_to_runner()
+# === HMS_INDIVIDUAL_STEM_PICKER_MP_END ===
+
 if __name__ == "__main__":
     print("=== Running Isolated Verification for hms_mvsep_multipass.py ===")
     try:

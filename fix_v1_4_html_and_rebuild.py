@@ -190,7 +190,7 @@ def rebuild_v1_4_onedir_bundle(
             "hms_mix_json_manager",
             "hms_gemini_tuner",
             "hms_ai_api_bridge",
-            "hms_mvsep_multipass",
+            "hms_mvsep_multipass", "hms_stem_picker_engine",
             "requests",
         ):
             cmd.extend(["--hidden-import", mod])

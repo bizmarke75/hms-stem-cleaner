@@ -6848,6 +6848,291 @@
 })();
 </script>
 <!-- /HMS_EMPTY_DIR_UI_GUARD_V1_4_1 -->
+
+<!-- HMS_INDIVIDUAL_STEM_PICKER_UI_V1_4_2_START -->
+<script>
+(function initHMSIndividualStemPickerV142() {
+  function mountPickerCard() {
+    const tab2 = document.getElementById('tab-panel-mvsep');
+    if (!tab2) return;
+
+    // Hide the old clunky rigid multi-pass card so there are no duplicate queue panels
+    const legacyCard = document.getElementById('hms-free-tier-multipass-card');
+    if (legacyCard) {
+      legacyCard.style.display = 'none';
+    }
+
+    if (document.getElementById('hms-stem-picker-card')) return;
+
+    const card = document.createElement('div');
+    card.id = 'hms-stem-picker-card';
+    card.style.cssText = [
+      'margin: 10px 0 14px 0',
+      'padding: 14px 16px',
+      'border: 1px solid #2b3a55',
+      'border-radius: 10px',
+      'background: linear-gradient(180deg, #101726 0%, #0b101b 100%)',
+      'color: #e6edf7',
+      'font-family: Segoe UI, system-ui, sans-serif'
+    ].join(';');
+
+    card.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px;">
+        <div>
+          <strong style="font-size:14px;color:#5eead4;letter-spacing:0.4px;">FREE-TIER INDIVIDUAL STEM PICKER &amp; RELIABLE DOWNLOADER</strong>
+          <div style="font-size:11px;color:#94a3b8;">100% Registered Free Tier Safe &bull; 1 Job at a Time &bull; Atomic .part Downloads &amp; 3x Retry</div>
+        </div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;">
+          <button type="button" class="hms-sp-preset" data-stems="vocals,drums,bass,guitar,piano,other" style="background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:6px;padding:4px 8px;font-size:11px;cursor:pointer;">All 6 Stems</button>
+          <button type="button" class="hms-sp-preset" data-stems="vocals,guitar,drums,bass,other" style="background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:6px;padding:4px 8px;font-size:11px;cursor:pointer;">Acoustic / Rock VIP</button>
+          <button type="button" class="hms-sp-preset" data-stems="vocals,guitar" style="background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:6px;padding:4px 8px;font-size:11px;cursor:pointer;">Vocals + Guitar</button>
+          <button type="button" class="hms-sp-preset" data-stems="vocals,instrumental" style="background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:6px;padding:4px 8px;font-size:11px;cursor:pointer;">Vocals + Backing</button>
+          <button type="button" class="hms-sp-preset" data-stems="drums,bass" style="background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:6px;padding:4px 8px;font-size:11px;cursor:pointer;">Drums + Bass</button>
+        </div>
+      </div>
+
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap;">
+        <input id="hms-sp-file-path" type="text" placeholder="Select Master Song (.wav, .flac, .mp3, .m4a)..." style="flex:1;min-width:260px;background:#070b14;color:#e2e8f0;border:1px solid #334155;border-radius:6px;padding:7px 10px;font-size:12px;" />
+        <button id="hms-sp-browse-btn" type="button" style="background:#1d4ed8;color:#fff;border:none;border-radius:6px;padding:7px 12px;font-size:12px;font-weight:600;cursor:pointer;">Browse Song</button>
+      </div>
+
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(165px,1fr));gap:8px;margin-bottom:10px;">
+        <label style="display:flex;align-items:center;gap:7px;background:#0d1424;border:1px solid #24324a;border-radius:6px;padding:7px 9px;font-size:12px;cursor:pointer;"><input type="checkbox" class="hms-sp-stem" value="vocals" checked /> Vocals</label>
+        <label style="display:flex;align-items:center;gap:7px;background:#0d1424;border:1px solid #24324a;border-radius:6px;padding:7px 9px;font-size:12px;cursor:pointer;"><input type="checkbox" class="hms-sp-stem" value="instrumental" /> Instrumental (No Vox)</label>
+        <label style="display:flex;align-items:center;gap:7px;background:#0d1424;border:1px solid #24324a;border-radius:6px;padding:7px 9px;font-size:12px;cursor:pointer;"><input type="checkbox" class="hms-sp-stem" value="drums" checked /> Drums</label>
+        <label style="display:flex;align-items:center;gap:7px;background:#0d1424;border:1px solid #24324a;border-radius:6px;padding:7px 9px;font-size:12px;cursor:pointer;"><input type="checkbox" class="hms-sp-stem" value="bass" checked /> Bass</label>
+        <label style="display:flex;align-items:center;gap:7px;background:#0d1424;border:1px solid #24324a;border-radius:6px;padding:7px 9px;font-size:12px;cursor:pointer;"><input type="checkbox" class="hms-sp-stem" value="guitar" checked /> Guitar</label>
+        <label style="display:flex;align-items:center;gap:7px;background:#0d1424;border:1px solid #24324a;border-radius:6px;padding:7px 9px;font-size:12px;cursor:pointer;"><input type="checkbox" class="hms-sp-stem" value="piano" /> Piano / Keys</label>
+        <label style="display:flex;align-items:center;gap:7px;background:#0d1424;border:1px solid #24324a;border-radius:6px;padding:7px 9px;font-size:12px;cursor:pointer;"><input type="checkbox" class="hms-sp-stem" value="other" checked /> Other (Cello / Synth)</label>
+        <label style="display:flex;align-items:center;gap:7px;background:#0d1424;border:1px solid #24324a;border-radius:6px;padding:7px 9px;font-size:12px;cursor:pointer;"><input type="checkbox" class="hms-sp-stem" value="drum_kit" /> Drum Kit Split (Kick/Snare)</label>
+      </div>
+
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px;">
+        <select id="hms-sp-quality" style="background:#070b14;color:#e2e8f0;border:1px solid #334155;border-radius:6px;padding:6px 10px;font-size:12px;">
+          <option value="fast" selected>Fast Free-Tier (1 Pass: BS Roformer SW 6-Stems)</option>
+          <option value="pro">Pro Free-Tier (Best Standalone Model per Stem Family)</option>
+        </select>
+        <select id="hms-sp-format" style="background:#070b14;color:#e2e8f0;border:1px solid #334155;border-radius:6px;padding:6px 10px;font-size:12px;">
+          <option value="1" selected>WAV 16-bit (Free Tier Safe)</option>
+          <option value="2">FLAC 16-bit Lossless (Free Tier Safe)</option>
+          <option value="0">MP3 320 kbps (Free Tier Safe)</option>
+        </select>
+        <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#cbd5e1;cursor:pointer;">
+          <input id="hms-sp-autoclean" type="checkbox" /> Auto-Clean with HMS VST3 after download
+        </label>
+      </div>
+
+      <div id="hms-sp-plan-preview" style="font-size:11px;color:#93c5fd;background:#070b14;border:1px dashed #293854;border-radius:6px;padding:7px 10px;margin-bottom:10px;">
+        Plan preview ready...
+      </div>
+
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px;">
+        <button id="hms-sp-start-btn" type="button" style="background:#059669;color:#fff;border:none;border-radius:6px;padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer;">Split Selected Stems (Free Tier)</button>
+        <button id="hms-sp-cancel-btn" type="button" style="background:#991b1b;color:#fff;border:none;border-radius:6px;padding:8px 12px;font-size:12px;font-weight:600;cursor:pointer;">Cancel Queue</button>
+        <span id="hms-sp-status-text" style="font-size:12px;color:#cbd5e1;">Idle</span>
+      </div>
+
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding-top:8px;border-top:1px solid #1e293b;">
+        <span style="font-size:11px;color:#fbbf24;font-weight:600;">Download / Recover Job Hash:</span>
+        <input id="hms-sp-hash-input" type="text" placeholder="Paste MVSep job hash to download only checked stems..." style="flex:1;min-width:220px;background:#070b14;color:#e2e8f0;border:1px solid #334155;border-radius:6px;padding:6px 9px;font-size:12px;" />
+        <button id="hms-sp-recover-btn" type="button" style="background:#d97706;color:#fff;border:none;border-radius:6px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer;">Download From Hash</button>
+      </div>
+    `;
+
+    tab2.insertBefore(card, tab2.firstChild);
+
+    function getCheckedStems() {
+      return Array.from(card.querySelectorAll('.hms-sp-stem:checked')).map(el => el.value);
+    }
+
+    function logToConsole(msg) {
+      if (typeof window.appendLog === 'function') {
+        window.appendLog(msg);
+      } else {
+        console.log(msg);
+      }
+    }
+
+    async function refreshPlanPreview() {
+      const stems = getCheckedStems();
+      const quality = document.getElementById('hms-sp-quality').value;
+      const fmt = parseInt(document.getElementById('hms-sp-format').value, 10);
+      const box = document.getElementById('hms-sp-plan-preview');
+      if (!stems.length) {
+        box.textContent = 'Check at least 1 stem above to build a Free-Tier plan.';
+        return;
+      }
+      if (window.pywebview && window.pywebview.api && window.pywebview.api.plan_free_tier_stems) {
+        try {
+          const res = await window.pywebview.api.plan_free_tier_stems({
+            selected_stems: stems,
+            quality_mode: quality,
+            output_format: fmt
+          });
+          if (res && res.ok) {
+            const steps = (res.passes || []).map((p, i) => `${i+1}. ${p.label} -> keep [${(p.keep_stems || []).join(', ') || 'temp drums feed'}]`);
+            box.textContent = `Free-Tier Plan (${res.passes.length} sequential pass): ` + steps.join('  |  ');
+          } else {
+            box.textContent = (res && res.reason) ? res.reason : 'Plan check failed.';
+          }
+        } catch (e) {
+          box.textContent = `Selected: ${stems.join(', ')} (${quality} mode)`;
+        }
+      } else {
+        box.textContent = `Selected: ${stems.join(', ')} (${quality} mode)`;
+      }
+    }
+
+    card.querySelectorAll('.hms-sp-stem').forEach(cb => cb.addEventListener('change', refreshPlanPreview));
+    document.getElementById('hms-sp-quality').addEventListener('change', refreshPlanPreview);
+    document.getElementById('hms-sp-format').addEventListener('change', refreshPlanPreview);
+
+    card.querySelectorAll('.hms-sp-preset').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const wanted = new Set(btn.getAttribute('data-stems').split(','));
+        card.querySelectorAll('.hms-sp-stem').forEach(cb => { cb.checked = wanted.has(cb.value); });
+        refreshPlanPreview();
+      });
+    });
+
+    document.getElementById('hms-sp-browse-btn').addEventListener('click', async () => {
+      try {
+        const api = window.pywebview && window.pywebview.api;
+        if (!api) return;
+        const fn = api.browse_song_file || api.browse_master_audio;
+        if (!fn) return;
+        const res = await fn();
+        const fp = res && (res.file_path || res.path);
+        if (fp) {
+          document.getElementById('hms-sp-file-path').value = fp;
+          logToConsole('[SUCCESS] Selected Master Audio -> ' + fp);
+        }
+      } catch (e) {
+        logToConsole('[ERROR] Browse song failed: ' + e);
+      }
+    });
+
+    let pollTimer = null;
+    let lastLogCount = 0;
+
+    function startStatusPolling() {
+      if (pollTimer) clearInterval(pollTimer);
+      lastLogCount = 0;
+      pollTimer = setInterval(async () => {
+        try {
+          const st = await window.pywebview.api.get_mvsep_multipass_status();
+          if (!st) return;
+          const statusEl = document.getElementById('hms-sp-status-text');
+          const logs = st.logs || [];
+          for (let i = lastLogCount; i < logs.length; i++) {
+            logToConsole(logs[i]);
+          }
+          lastLogCount = logs.length;
+          if (st.last_job_hash) {
+            const hIn = document.getElementById('hms-sp-hash-input');
+            if (hIn && !hIn.value) hIn.value = st.last_job_hash;
+          }
+          if (st.running) {
+            statusEl.textContent = `Running Pass ${st.current_pass_index || 1}/${st.total_passes || 1}: ${st.current_pass_label || ''}`;
+          } else {
+            clearInterval(pollTimer);
+            pollTimer = null;
+            if (st.error) {
+              statusEl.textContent = 'Error: ' + st.error;
+            } else if (st.song_workspace_dir) {
+              statusEl.textContent = 'Done! Stems -> ' + st.song_workspace_dir;
+              const srcBox = document.getElementById('source-dir-input') || document.getElementById('song-dir-input');
+              if (srcBox) srcBox.value = st.song_workspace_dir;
+            } else {
+              statusEl.textContent = 'Idle';
+            }
+          }
+        } catch (e) {}
+      }, 2500);
+    }
+
+    document.getElementById('hms-sp-start-btn').addEventListener('click', async () => {
+      const stems = getCheckedStems();
+      const fileInput = document.getElementById('hms-sp-file-path');
+      // Fall back to existing Tab 2 master audio input if user selected it there
+      let filePath = (fileInput.value || '').trim();
+      if (!filePath) {
+        const alt = document.querySelector('#tab-panel-mvsep input[type="text"]');
+        if (alt && alt.id !== 'hms-sp-hash-input' && alt.value.trim()) filePath = alt.value.trim();
+      }
+      if (!filePath) {
+        logToConsole('[ERROR] Pick a Master Song audio file first.');
+        return;
+      }
+      if (!stems.length) {
+        logToConsole('[ERROR] Check at least one individual stem first.');
+        return;
+      }
+      try {
+        const res = await window.pywebview.api.start_mvsep_selected_stems({
+          file_path: filePath,
+          selected_stems: stems,
+          quality_mode: document.getElementById('hms-sp-quality').value,
+          output_format: parseInt(document.getElementById('hms-sp-format').value, 10),
+          auto_clean: document.getElementById('hms-sp-autoclean').checked
+        });
+        if (res && res.status === 'ok') {
+          document.getElementById('hms-sp-status-text').textContent = res.message || 'Queued...';
+          logToConsole('[RUN] ' + (res.message || 'Started Free-Tier individual stem queue.'));
+          startStatusPolling();
+        } else {
+          const msg = (res && res.message) ? res.message : 'Failed to start queue.';
+          document.getElementById('hms-sp-status-text').textContent = 'Blocked: ' + msg;
+          logToConsole('[ERROR] ' + msg);
+        }
+      } catch (e) {
+        logToConsole('[ERROR] start_mvsep_selected_stems exception: ' + e);
+      }
+    });
+
+    document.getElementById('hms-sp-cancel-btn').addEventListener('click', async () => {
+      try {
+        await window.pywebview.api.cancel_mvsep_multipass();
+        document.getElementById('hms-sp-status-text').textContent = 'Cancelling...';
+      } catch (e) {}
+    });
+
+    document.getElementById('hms-sp-recover-btn').addEventListener('click', async () => {
+      const jobHash = (document.getElementById('hms-sp-hash-input').value || '').trim();
+      if (!jobHash) {
+        logToConsole('[ERROR] Paste a finished MVSep job hash first.');
+        return;
+      }
+      const stems = getCheckedStems();
+      document.getElementById('hms-sp-status-text').textContent = 'Downloading from hash ' + jobHash + '...';
+      try {
+        const res = await window.pywebview.api.recover_mvsep_job_hash({
+          job_hash: jobHash,
+          selected_stems: stems.length ? stems : null
+        });
+        if (res && res.status === 'ok') {
+          document.getElementById('hms-sp-status-text').textContent = res.message;
+          logToConsole('[SUCCESS] ' + res.message);
+          const srcBox = document.getElementById('source-dir-input') || document.getElementById('song-dir-input');
+          if (srcBox && res.song_workspace_dir) srcBox.value = res.song_workspace_dir;
+        } else {
+          const msg = (res && res.message) ? res.message : 'Recovery failed.';
+          document.getElementById('hms-sp-status-text').textContent = msg;
+          logToConsole('[ERROR] ' + msg);
+        }
+      } catch (e) {
+        logToConsole('[ERROR] recover_mvsep_job_hash exception: ' + e);
+      }
+    });
+
+    setTimeout(refreshPlanPreview, 300);
+  }
+
+  window.addEventListener('DOMContentLoaded', () => setTimeout(mountPickerCard, 400));
+  window.addEventListener('pywebviewready', () => setTimeout(mountPickerCard, 250));
+})();
+</script>
+<!-- HMS_INDIVIDUAL_STEM_PICKER_UI_V1_4_2_END -->
 </body>
 
 </html>
